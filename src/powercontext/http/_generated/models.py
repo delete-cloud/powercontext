@@ -3155,7 +3155,7 @@ class PreparedContextWithGate(BaseModel):
     recall_gate: Annotated[
         RecallGateResult | None,
         Field(
-            description="Aggregate verdict only when include_recall_gate is true and the gate loop runs. Omitted when not requested, disabled, or skipped; content remains present even when null."
+            description="Aggregate verdict present only when include_recall_gate is true and the gate loop ran. Omitted rather than null when not requested, disabled, or skipped."
         ),
     ] = None
 

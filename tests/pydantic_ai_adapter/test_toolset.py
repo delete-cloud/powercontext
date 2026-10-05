@@ -113,7 +113,10 @@ def test_toolset_exposes_exact_schemas_instructions_request_mapping_and_full_res
     }
     assert returns["powercontext_search"] == search_response().model_dump(mode="json", by_alias=True)
     assert returns["powercontext_remember"] == remember_response().model_dump(mode="json", by_alias=True)
-    assert returns["powercontext_context"] == prepared_response().model_dump(mode="json", by_alias=True)
+    assert returns["powercontext_context"] == prepared_response().model_dump(
+        mode="json", by_alias=True, exclude_unset=True
+    )
+    assert "recall_gate" not in returns["powercontext_context"]
 
 
 def test_toolset_converts_client_failure_to_model_retry(monkeypatch: pytest.MonkeyPatch) -> None:

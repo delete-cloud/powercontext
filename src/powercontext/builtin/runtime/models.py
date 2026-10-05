@@ -268,6 +268,7 @@ class PreparedContext(_PreparedContextModel):
     status: PreparedContextStatus
     content: str | None
     content_bytes: Annotated[int, Field(ge=0)]
+    # Opt-in transport projection: the HTTP mapper reads the attribute directly, so dumps stay on the legacy shape.
     recall_gate: RecallGateResult | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")

@@ -28,7 +28,7 @@ from powercontext.http import (
     MemoryMatchedBy,
     MemoryMutationResponse,
     MemoryUsedSearchMode,
-    PreparedContext,
+    PreparedContextWithGate,
     ScopeDescriptor,
     SearchMemoryHit,
     SearchMemoryResponse,
@@ -81,8 +81,8 @@ def remember_response() -> MemoryMutationResponse:
     )
 
 
-def prepared_response(content: str | None = "Prepared memory evidence.") -> PreparedContext:
-    return PreparedContext.model_validate({
+def prepared_response(content: str | None = "Prepared memory evidence.") -> PreparedContextWithGate:
+    return PreparedContextWithGate.model_validate({
         "schema": "powercontext.prepared-context.v1",
         "status": "ready" if content else "empty",
         "content": content,

@@ -7087,8 +7087,7 @@ components:
           minimum: 0
         recall_gate:
           $ref: "#/components/schemas/RecallGateResult"
-          nullable: true
-          description: Aggregate verdict only when include_recall_gate is true and the gate loop runs. Omitted when not requested, disabled, or skipped; content remains present even when null.
+          description: Aggregate verdict present only when include_recall_gate is true and the gate loop ran. Omitted rather than null when not requested, disabled, or skipped.
     RecallGateResult:
       type: object
       additionalProperties: false

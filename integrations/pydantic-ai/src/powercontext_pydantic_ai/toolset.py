@@ -252,4 +252,4 @@ class PowerContextToolset(FunctionToolset[AgentDepsT], Generic[AgentDepsT]):
 
 
 def _response_json(response: BaseModel) -> dict[str, Any]:
-    return response.model_dump(mode="json", by_alias=True)
+    return response.model_dump(mode="json", by_alias=True, exclude_unset=True)

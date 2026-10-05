@@ -6623,6 +6623,7 @@ OPENAPI_SCHEMA: dict[str, JsonValue] = {
                         "$ref": "#/components/schemas/RecallGateResult",
                         "description": "Aggregate "
                         "verdict "
+                        "present "
                         "only "
                         "when "
                         "include_recall_gate "
@@ -6632,21 +6633,17 @@ OPENAPI_SCHEMA: dict[str, JsonValue] = {
                         "the "
                         "gate "
                         "loop "
-                        "runs. "
+                        "ran. "
                         "Omitted "
+                        "rather "
+                        "than "
+                        "null "
                         "when "
                         "not "
                         "requested, "
                         "disabled, "
                         "or "
-                        "skipped; "
-                        "content "
-                        "remains "
-                        "present "
-                        "even "
-                        "when "
-                        "null.",
-                        "nullable": True,
+                        "skipped.",
                     },
                 },
                 "additionalProperties": False,

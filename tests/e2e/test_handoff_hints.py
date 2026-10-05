@@ -92,6 +92,11 @@ def test_hint_delivery_preserves_full_prepared_and_committed_handoffs(tmp_path: 
             assert hint_data["evidence_scope_id"] == scope_id
             assert hint_data["selected_evidence"][0]["source_ref"]["source_id"] == source.source.source_id
             assert set(hint.model_dump(by_alias=True)) == {"schema", "status", "content", "content_bytes"}
+            raw_hint = await transport.post(
+                "/v1/handoff/hint", json=request.model_dump(mode="json", by_alias=True, exclude_unset=True)
+            )
+            assert raw_hint.status_code == 200
+            assert set(raw_hint.json()) == {"schema", "status", "content", "content_bytes"}
             assert (
                 await client.prepare_handoff_hint(request.model_copy(update={"max_bytes": hint.content_bytes}))
             ) == hint
