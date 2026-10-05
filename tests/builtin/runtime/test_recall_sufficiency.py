@@ -714,7 +714,7 @@ def test_effort_rounds_is_one_plus_the_committed_expansions() -> None:
     for effort in (none, one, two):
         assert effort.rounds == 1 + len(effort.expansion_actions)
         assert len(effort.candidates_by_round) == effort.rounds
-        assert effort.policy == POLICY_ID
+        assert effort.policy == "powercontext.recall-gate.v2"
 
 
 def test_effort_folds_the_builder_omission_counts_and_keeps_their_sum() -> None:

@@ -42,7 +42,7 @@ if TYPE_CHECKING:
     from powercontext.builtin.runtime.prepared_context import PreparedContextOmissions
 
 # ── Policy identifier and reason vocabulary ────────────────────────────────────────────────
-POLICY_ID = "powercontext.recall-gate.v1"
+POLICY_ID = "powercontext.recall-gate.v2"
 
 REASON_SUFFICIENT = "sufficient"
 REASON_NO_CONTENT = "no-content"

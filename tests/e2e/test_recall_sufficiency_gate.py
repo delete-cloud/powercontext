@@ -26,6 +26,7 @@ import asyncio
 import math
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -318,6 +319,66 @@ def test_sqlite_vector_prepare_reports_cosine_and_stops_unimprovable_score_expan
         assert len(observed) == 1
         memory_admission = next(count for count in observed[0].admission_by_family if count.family == MEMORY_FAMILY)
         assert memory_admission.retrieved > memory_admission.admitted
+
+    asyncio.run(scenario())
+
+
+def test_expansion_fts_only_hit_preserves_round_zero_scored_family(tmp_path, monkeypatch) -> None:
+    embedding_profile = EmbeddingProfile(
+        profile_id="recall-gate-first-hit", model="deterministic", dimension=2, distance="l2", normalization="unit"
+    )
+
+    class DeterministicEmbedding:
+        profile = embedding_profile
+
+        async def embed(self, texts: tuple[str, ...], /) -> EmbeddingResult:
+            vectors = {_QUERY: (1.0, 0.0), "alpha beta gamma evidence": (0.5, math.sqrt(0.75))}
+            return EmbeddingResult(vectors=tuple(vectors.get(text, (0.0, 1.0)) for text in texts))
+
+    original = ScopedContextApplication._recall_round
+    expansion_first_relevance = []
+
+    async def fts_first_expansion(*args: Any, **kwargs: Any) -> _RecallRoundOutcome:
+        result = await original(*args, **kwargs)
+        if kwargs["admission"] is None:
+            return result
+        # Put the new FTS-only hit first in the returned round. Accumulation must still append it
+        # after round zero's vector-backed first hit rather than replace the family's first hit.
+        memory = tuple(replace(group, hits=tuple(reversed(group.hits))) for group in result.memory)
+        expansion_first_relevance.extend(group.hits[0].relevance for group in memory if group.hits)
+        return replace(result, memory=memory)
+
+    monkeypatch.setattr(ScopedContextApplication, "_recall_round", fts_first_expansion)
+
+    async def scenario() -> None:
+        database = tmp_path / "first-hit.db"
+        request = _memory_request().model_copy(update={"include_recall_gate": True})
+        async with _runtime(
+            database,
+            RuntimeConfig(recall_gate_enabled=True, recall_gate_max_rounds=0),
+            embedding_model=DeterministicEmbedding(),
+        ) as runtime:
+            scope_id = await _create_scope(runtime, "first-hit")
+            await _seed(runtime, scope_id, ["alpha beta gamma evidence", "alpha solo evidence"])
+            before = await runtime.context.for_scope(scope_id).prepare(request)
+
+        async with _runtime(
+            database,
+            RuntimeConfig(recall_gate_enabled=True),
+            embedding_model=DeterministicEmbedding(),
+        ) as runtime:
+            after = await runtime.context.for_scope(scope_id).prepare(request)
+
+        assert before.recall_gate is not None
+        assert before.recall_gate.candidate_count == 1
+        assert before.recall_gate.top_relevance == pytest.approx(0.5, abs=0.005)
+        assert expansion_first_relevance == [None]
+        assert after.recall_gate is not None
+        assert after.recall_gate.rounds == 2
+        assert after.recall_gate.candidate_count == 2
+        assert after.recall_gate.top_relevance == before.recall_gate.top_relevance
+        assert after.recall_gate.reason == REASON_SUFFICIENT
+        assert "alpha solo evidence" in (after.content or "")
 
     asyncio.run(scenario())
 

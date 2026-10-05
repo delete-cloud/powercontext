@@ -893,7 +893,7 @@ class ScopedContextApplication:
                 "recall_gate": RecallGateResult(
                     reason=effort.assessment,
                     rounds=effort.rounds,
-                    candidate_count=effort.candidates_by_round[0] if signals is None else signals.candidate_count,
+                    candidate_count=effort.candidates_by_round[-1] if signals is None else signals.candidate_count,
                     top_relevance=None if signals is None or signals.scored_families == 0 else signals.top_score,
                     lexical_overlap=None if signals is None else signals.lexical_overlap,
                 )

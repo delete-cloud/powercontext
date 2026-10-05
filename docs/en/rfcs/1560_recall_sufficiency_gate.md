@@ -145,6 +145,13 @@ gap unknown. Strong top relevance (`>= 0.70`) bypasses the gap check, while the 
 applies. Candidate-capture JSON retains the normalized fused rank at `assessments.candidates[].score` for external
 tooling; that value does not enter the gate's relevance thresholds.
 
+The policy identifier is `powercontext.recall-gate.v2`. Version 1 used family-local normalized fused rank scores for
+`top_score`, `mean_score` and `top_gap`; version 2 uses vector cosine relevance for those signals. Historical captures
+with `policy_id: powercontext.recall-gate.v1` retain the rank-based interpretation and must not be relabelled as v2.
+The inherited defaults `min_top_score=0.35` and `min_top_gap=0.02` were calibrated against the old rank scores. They are
+**provisional values on the cosine scale and have not been recalibrated**; carrying the defaults forward does not
+establish their suitability for cosine relevance.
+
 **Evidence identity is family-specific.** A single Memory search returns many `MemoryHit` values that all share one
 `memory_ref` Artifact revision, because one Memory Revision holds many entries; the independent unit of evidence is the
 entry, identified by `entry_id` and `entry_version_id` (`memory/models.py:142-150`). Counting distinct Artifact
@@ -240,7 +247,7 @@ class AdmissionCounts:
 
 @dataclass(frozen=True)
 class RecallEffort:
-    policy: str                       # versioned policy id, e.g. "powercontext.recall-gate.v1"
+    policy: str                       # versioned policy id, e.g. "powercontext.recall-gate.v2"
     assessment: str                   # final gate reason, e.g. "sufficient" | "thin-candidates" | "weak-top-1"
     rounds: int                       # committed passes: round zero + len(expansion_actions), so 1..3
     expansion_actions: tuple[str, ...]  # committed rounds only; at most ("admission", "policy-floor")

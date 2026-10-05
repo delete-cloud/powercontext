@@ -127,6 +127,12 @@ cosine 相关度由共享的单位向量 L2 helper 按 `clamp(1 - d² / 2, -1, 1
 强匹配（顶部相关度 `>= 0.70`）跳过差距检查，但仍应用配置的最低顶部相关度。候选捕获 JSON 保留
 `assessments.candidates[].score` 的归一化融合名次值供外部工具链使用；该值不参与闸门的相关度阈值判断。
 
+当前 policy 标识为 `powercontext.recall-gate.v2`。v1 的 `top_score`、`mean_score` 与 `top_gap` 基于类别内归一化
+融合名次分；v2 的这些信号改为基于向量 cosine 相关度。历史捕获中
+`policy_id: powercontext.recall-gate.v1` 仍按名次分口径解释，不得重新标为 v2。
+继承的默认值 `min_top_score=0.35` 与 `min_top_gap=0.02` 针对旧名次分标定，在 cosine 尺度上是
+**暂定值，尚未重新标定**；沿用默认值不代表已证明它们适合 cosine 相关度。
+
 **证据身份是类别专属的。** 一次 Memory 搜索返回的多个 `MemoryHit` 共享同一个 `memory_ref` Artifact revision，因为一个
 Memory Revision 装有多个条目；真正独立的证据单位是条目，由 `entry_id` 与 `entry_version_id` 标识
 （`memory/models.py:142-150`）。因此统计"不同 Artifact revision 数"会把任意 Memory-only 结果都压成一个来源。闸门
@@ -212,7 +218,7 @@ class AdmissionCounts:
 
 @dataclass(frozen=True)
 class RecallEffort:
-    policy: str                       # 带版本的 policy id，如 "powercontext.recall-gate.v1"
+    policy: str                       # 带版本的 policy id，如 "powercontext.recall-gate.v2"
     assessment: str                   # 最终闸门原因，如 "sufficient" | "thin-candidates" | "weak-top-1"
     rounds: int                       # 已提交轮次：第 0 轮 + len(expansion_actions)，即 1..3
     expansion_actions: tuple[str, ...]  # 仅已提交的轮次；最多 ("admission", "policy-floor")
