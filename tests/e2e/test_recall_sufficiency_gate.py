@@ -278,23 +278,35 @@ def test_sqlite_vector_prepare_reports_cosine_and_stops_unimprovable_score_expan
         profile = embedding_profile
 
         async def embed(self, texts: tuple[str, ...], /) -> EmbeddingResult:
+            similarities = tuple(
+                1.0 if text == _QUERY else 0.2 if text == "unrelated vector evidence" else 0.31 for text in texts
+            )
             return EmbeddingResult(
-                vectors=tuple((1.0, 0.0) if text == _QUERY else (0.31, math.sqrt(1.0 - 0.31**2)) for text in texts)
+                vectors=tuple((similarity, math.sqrt(1.0 - similarity**2)) for similarity in similarities)
             )
 
     log = _RecallRoundLog()
-    log.force_recoverable_family = MEMORY_FAMILY
     log.install(monkeypatch)
 
     async def scenario() -> None:
         database = tmp_path / "vector-gate.db"
-        async with _runtime(
-            database,
-            RuntimeConfig(recall_gate_enabled=True, recall_gate_min_candidates=1),
+        observed = []
+
+        async def sink(effort) -> None:
+            observed.append(effort)
+
+        config = BuiltinConfig(
+            database=SQLiteConfig(url=f"sqlite+aiosqlite:///{database}"),
+            runtime=RuntimeConfig(recall_gate_enabled=True, recall_gate_min_candidates=1),
+        )
+        async with open_builtin_runtime(
+            config,
+            scheduler_path=database.with_suffix(".scheduler.db"),
             embedding_model=DeterministicEmbedding(),
+            recall_effort_sink=sink,
         ) as runtime:
             scope_id = await _create_scope(runtime, "vector-gate")
-            await _seed(runtime, scope_id, ["alpha beta gamma vector evidence"])
+            await _seed(runtime, scope_id, ["alpha beta gamma vector evidence", "unrelated vector evidence"])
             prepared = await runtime.context.for_scope(scope_id).prepare(
                 _memory_request().model_copy(update={"include_recall_gate": True})
             )
@@ -303,6 +315,9 @@ def test_sqlite_vector_prepare_reports_cosine_and_stops_unimprovable_score_expan
         assert prepared.recall_gate.reason == "weak-top-1"
         assert prepared.recall_gate.rounds == 1
         assert len(log.calls) == 1
+        assert len(observed) == 1
+        memory_admission = next(count for count in observed[0].admission_by_family if count.family == MEMORY_FAMILY)
+        assert memory_admission.retrieved > memory_admission.admitted
 
     asyncio.run(scenario())
 
@@ -640,7 +655,8 @@ def test_later_rounds_never_remove_an_accumulated_candidate(tmp_path, monkeypatc
     asyncio.run(scenario())
 
 
-def test_later_round_failure_preserves_committed_expansion_trace(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("failure_phase", ["search", "assessment"])
+def test_later_round_failure_preserves_committed_expansion(tmp_path, monkeypatch, failure_phase) -> None:
     async def scenario() -> None:
         database = tmp_path / "later-failure.db"
         request = _memory_request()
@@ -649,6 +665,15 @@ def test_later_round_failure_preserves_committed_expansion_trace(tmp_path, monke
             scope_id = await _create_scope(disabled, "later-failure")
             await _seed(disabled, scope_id, ["alpha beta gamma evidence", "alpha solo marker", "beta gamma marker"])
             baseline, _baseline_effort = await _prepare_build(disabled, scope_id, request)
+
+        async with _runtime(
+            database,
+            RuntimeConfig(recall_gate_enabled=True, recall_gate_min_candidates=100, recall_gate_max_rounds=1),
+        ) as runtime:
+            committed, committed_effort = await _prepare_build(runtime, scope_id, request)
+        assert committed_effort is not None
+        assert committed_effort.candidates_by_round == (2, 3)
+        assert committed.context.content != baseline.context.content
 
         original = ScopedContextApplication._recall_round
         calls = 0
@@ -666,7 +691,7 @@ def test_later_round_failure_preserves_committed_expansion_trace(tmp_path, monke
         ) -> Any:
             nonlocal calls
             calls += 1
-            if calls == 3:
+            if calls == 3 and failure_phase == "search":
                 raise RuntimeError("later expansion failed")  # noqa: TRY003
             result = await original(
                 application,
@@ -697,6 +722,14 @@ def test_later_round_failure_preserves_committed_expansion_trace(tmp_path, monke
             return result
 
         monkeypatch.setattr(ScopedContextApplication, "_recall_round", fails_on_second_expansion)
+        original_assess = RecallSufficiencyGate.assess
+
+        def fails_on_second_assessment(*args: Any, **kwargs: Any) -> Any:
+            if calls == 3 and failure_phase == "assessment":
+                raise RuntimeError("later assessment failed")  # noqa: TRY003
+            return original_assess(*args, **kwargs)
+
+        monkeypatch.setattr(RecallSufficiencyGate, "assess", fails_on_second_assessment)
         async with _runtime(
             database,
             RuntimeConfig(recall_gate_enabled=True, recall_gate_min_candidates=100),
@@ -714,13 +747,15 @@ def test_later_round_failure_preserves_committed_expansion_trace(tmp_path, monke
         assert len(effort.candidates_by_round) == 2
         assert effort.signals is not None
         assert effort.signals.candidate_count == effort.candidates_by_round[-1]
+        assert effort.signals == committed_effort.signals
         assert exposed.recall_gate is not None
         assert exposed.recall_gate.reason == REASON_EXPANSION_FAILED
         assert exposed.recall_gate.rounds == 2
         assert exposed.recall_gate.candidate_count == effort.candidates_by_round[-1]
         assert calls == 3
-        assert build.context.content == baseline.context.content
-        assert build.origins == baseline.origins
+        assert build.context.content == committed.context.content
+        assert build.origins == committed.origins
+        assert exposed.content == committed.context.content
 
     asyncio.run(scenario())
 
@@ -741,6 +776,9 @@ def test_gate_failure_fails_open_to_the_round_zero_result(tmp_path, monkeypatch)
         monkeypatch.setattr(RecallSufficiencyGate, "assess", exploded)
         async with _runtime(database, RuntimeConfig(recall_gate_enabled=True)) as runtime:
             build, effort = await _prepare_build(runtime, scope_id, request)
+            exposed = await runtime.context.for_scope(scope_id).prepare(
+                request.model_copy(update={"include_recall_gate": True})
+            )
 
         assert effort is not None
         assert effort.assessment == REASON_EXPANSION_FAILED
@@ -749,6 +787,13 @@ def test_gate_failure_fails_open_to_the_round_zero_result(tmp_path, monkeypatch)
         assert len(effort.candidates_by_round) == 1
         assert build.context.content == baseline.context.content
         assert build.origins == baseline.origins
+        assert exposed.content == baseline.context.content
+        assert exposed.recall_gate is not None
+        assert exposed.recall_gate.reason == REASON_EXPANSION_FAILED
+        assert exposed.recall_gate.rounds == 1
+        assert exposed.recall_gate.candidate_count == effort.candidates_by_round[0]
+        assert exposed.recall_gate.top_relevance is None
+        assert exposed.recall_gate.lexical_overlap is None
 
     asyncio.run(scenario())
 

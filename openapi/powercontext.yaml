@@ -7072,6 +7072,7 @@ components:
         recall_gate:
           $ref: "#/components/schemas/RecallGateResult"
           nullable: true
+          description: Aggregate verdict only when include_recall_gate is true and the gate loop runs. Omitted when not requested, disabled, or skipped; content remains present even when null.
     RecallGateResult:
       type: object
       additionalProperties: false
@@ -7084,9 +7085,11 @@ components:
         rounds:
           type: integer
           minimum: 1
+          description: Assessed and committed search passes, including round zero. A failed expansion is not counted.
         candidate_count:
           type: integer
           minimum: 0
+          description: Accumulated candidate count at the last committed assessment, before Builder ceilings and byte fitting; round-zero count if assessment failed before scoring.
         top_relevance:
           type: number
           minimum: -1

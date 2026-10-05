@@ -6606,7 +6606,35 @@ OPENAPI_SCHEMA: dict[str, JsonValue] = {
                     "status": {"$ref": "#/components/schemas/PreparedContextStatus"},
                     "content": {"type": "string", "nullable": True},
                     "content_bytes": {"type": "integer", "minimum": 0.0},
-                    "recall_gate": {"$ref": "#/components/schemas/RecallGateResult", "nullable": True},
+                    "recall_gate": {
+                        "$ref": "#/components/schemas/RecallGateResult",
+                        "description": "Aggregate "
+                        "verdict "
+                        "only "
+                        "when "
+                        "include_recall_gate "
+                        "is "
+                        "true "
+                        "and "
+                        "the "
+                        "gate "
+                        "loop "
+                        "runs. "
+                        "Omitted "
+                        "when "
+                        "not "
+                        "requested, "
+                        "disabled, "
+                        "or "
+                        "skipped; "
+                        "content "
+                        "remains "
+                        "present "
+                        "even "
+                        "when "
+                        "null.",
+                        "nullable": True,
+                    },
                 },
                 "additionalProperties": False,
                 "type": "object",
@@ -6619,8 +6647,47 @@ OPENAPI_SCHEMA: dict[str, JsonValue] = {
                         "minLength": 1,
                         "description": "Final recall gate reason code; contains no query or evidence identity.",
                     },
-                    "rounds": {"type": "integer", "minimum": 1.0},
-                    "candidate_count": {"type": "integer", "minimum": 0.0},
+                    "rounds": {
+                        "type": "integer",
+                        "minimum": 1.0,
+                        "description": "Assessed "
+                        "and "
+                        "committed "
+                        "search "
+                        "passes, "
+                        "including "
+                        "round "
+                        "zero. A "
+                        "failed "
+                        "expansion "
+                        "is not "
+                        "counted.",
+                    },
+                    "candidate_count": {
+                        "type": "integer",
+                        "minimum": 0.0,
+                        "description": "Accumulated "
+                        "candidate "
+                        "count "
+                        "at "
+                        "the "
+                        "last "
+                        "committed "
+                        "assessment, "
+                        "before "
+                        "Builder "
+                        "ceilings "
+                        "and "
+                        "byte "
+                        "fitting; "
+                        "round-zero "
+                        "count "
+                        "if "
+                        "assessment "
+                        "failed "
+                        "before "
+                        "scoring.",
+                    },
                     "top_relevance": {
                         "type": "number",
                         "maximum": 1.0,

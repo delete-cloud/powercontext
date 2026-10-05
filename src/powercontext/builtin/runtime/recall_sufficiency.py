@@ -79,8 +79,8 @@ _STRONG_TOP_RELEVANCE = 0.7
 class RecallCandidate:
     """One family-local retrieval result, projected for model-free assessment.
 
-    ``score`` retains the family-local normalized RRF rank value for candidate captures and
-    existing consumers. ``relevance`` is the cosine similarity of the best admitted vector
+    ``score`` retains the family-local normalized RRF rank value for external gate-capture JSON
+    consumers of ``assessments.candidates[].score``. ``relevance`` is the cosine similarity of the best admitted vector
     channel, when one exists. Only relevance enters the gate's score thresholds.
     """
 
@@ -421,7 +421,7 @@ def _normalize_memory_score(hit: MemoryHit) -> float:
 
 
 def _normalize_topic_score(hit: TopicMemorySearchHit) -> float:
-    """Normalize Topic Memory relevance into ``[0.0, 1.0]``."""
+    """Normalize a Topic Memory fused rank score into ``[0.0, 1.0]`` for captures."""
 
     return max(0.0, min(1.0, hit.score / _TOPIC_SCORE_SCALE))
 
@@ -443,8 +443,8 @@ class RecallSufficiencyGate:
         """Assess one candidate set. No I/O, no clock, no model; deterministic in its inputs.
 
         ``budget`` carries the result of the round's budget probe, or ``None`` when no probe
-        was run. The gate does not perform the probe itself; the Runtime does it once, on
-        round 0, and reuses the view for every round.
+        was run. The gate does not perform the probe itself; the Runtime probes each round's
+        capped candidate set before committing its assessment.
         """
 
         signals = _build_signals(candidates, query, families_expected)

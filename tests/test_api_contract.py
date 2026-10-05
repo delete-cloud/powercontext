@@ -489,6 +489,16 @@ def test_prepared_context_is_a_generic_typed_operation_outside_the_mcp_memory_to
         "content_bytes",
         "recall_gate",
     }
+    assert set(schemas["PreparedContext"]["required"]) == {"schema", "status", "content", "content_bytes"}
+    assert schemas["PreparedContext"]["properties"]["content"]["nullable"] is True
+    assert schemas["PrepareContextRequest"]["properties"]["include_recall_gate"]["default"] is False
+    assert set(schemas["RecallGateResult"]["required"]) == {
+        "reason",
+        "rounds",
+        "candidate_count",
+        "top_relevance",
+        "lexical_overlap",
+    }
     assert not {"memory", "mode", "selection"} & set(schemas["PreparedContext"]["properties"])
 
 

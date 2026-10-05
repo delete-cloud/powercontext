@@ -1102,20 +1102,54 @@ def test_prepare_context_gate_opt_in_preserves_legacy_http_shape(tmp_path) -> No
         with TestClient(app) as client:
             scope_id = client.get("/v1/scopes/default").json()["scope_id"]
             request = {"scope_id": scope_id, "query": "alpha beta"}
-            legacy_response = client.post("/v1/context/prepare", json=request)
-            assert legacy_response.status_code == 200
-            legacy_body = legacy_response.json()
-            assert set(legacy_body) == legacy_fields
-            assert validate_prepared_context(legacy_body) == legacy_body
+            for legacy_request in (request, {**request, "include_recall_gate": False}):
+                legacy_response = client.post("/v1/context/prepare", json=legacy_request)
+                assert legacy_response.status_code == 200
+                legacy_body = legacy_response.json()
+                assert set(legacy_body) == legacy_fields
+                assert legacy_body["status"] == "empty"
+                assert legacy_body["content"] is None
+                assert legacy_body["content_bytes"] == 0
+                assert validate_prepared_context(legacy_body) == legacy_body
 
             opted_response = client.post("/v1/context/prepare", json={**request, "include_recall_gate": True})
             assert opted_response.status_code == 200
             opted_body = opted_response.json()
+            assert opted_body["content"] is None
             if enabled:
                 assert set(opted_body) == legacy_fields | {"recall_gate"}
-                assert opted_body["recall_gate"]["reason"] == "no-content"
+                assert opted_body["recall_gate"] == {
+                    "reason": "no-content",
+                    "rounds": 1,
+                    "candidate_count": 0,
+                    "top_relevance": None,
+                    "lexical_overlap": 0.0,
+                }
             else:
                 assert set(opted_body) == legacy_fields
+
+            skipped_response = client.post(
+                "/v1/context/prepare",
+                json={**request, "include_recall_gate": True, "assembly": {"sections": []}},
+            )
+            assert skipped_response.status_code == 200
+            skipped_body = skipped_response.json()
+            assert set(skipped_body) == legacy_fields
+            assert skipped_body["content"] is None
+            assert validate_prepared_context(skipped_body) == skipped_body
+
+            remembered = client.post(
+                "/v1/memory/remember",
+                json={"scope_id": scope_id, "kind": "fact", "text": "alpha beta evidence"},
+            )
+            assert remembered.status_code == 200
+            populated_response = client.post("/v1/context/prepare", json=request)
+            assert populated_response.status_code == 200
+            populated_body = populated_response.json()
+            assert set(populated_body) == legacy_fields
+            assert populated_body["status"] == "ready"
+            assert "alpha beta evidence" in populated_body["content"]
+            assert validate_prepared_context(populated_body) == populated_body
 
 
 def test_prepare_context_rejects_unicode_surrogates_without_crashing(tmp_path) -> None:

@@ -862,8 +862,20 @@ class RecallGateResult(BaseModel):
         StrictStr,
         Field(description="Final recall gate reason code; contains no query or evidence identity.", min_length=1),
     ]
-    rounds: Annotated[StrictInt, Field(ge=1)]
-    candidate_count: Annotated[StrictInt, Field(ge=0)]
+    rounds: Annotated[
+        StrictInt,
+        Field(
+            description="Assessed and committed search passes, including round zero. A failed expansion is not counted.",
+            ge=1,
+        ),
+    ]
+    candidate_count: Annotated[
+        StrictInt,
+        Field(
+            description="Accumulated candidate count at the last committed assessment, before Builder ceilings and byte fitting; round-zero count if assessment failed before scoring.",
+            ge=0,
+        ),
+    ]
     top_relevance: Annotated[
         StrictFloat | None,
         Field(
@@ -3130,7 +3142,12 @@ class PreparedContext(BaseModel):
     status: PreparedContextStatus
     content: Annotated[StrictStr | None, Field(...)]
     content_bytes: Annotated[StrictInt, Field(ge=0)]
-    recall_gate: RecallGateResult | None = None
+    recall_gate: Annotated[
+        RecallGateResult | None,
+        Field(
+            description="Aggregate verdict only when include_recall_gate is true and the gate loop runs. Omitted when not requested, disabled, or skipped; content remains present even when null."
+        ),
+    ] = None
 
 
 class EntryChange(BaseModel):

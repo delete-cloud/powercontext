@@ -508,12 +508,14 @@ def test_lower_floor_candidates_cannot_manufacture_a_top_gap() -> None:
     assert after.signals.top_gap == pytest.approx(before.signals.top_gap)
 
 
-def test_one_scored_candidate_skips_gap_even_with_fts_competitors() -> None:
-    candidates = (
-        _topic_candidate(1.0, text="alpha beta", relevance=0.8),
-        _topic_candidate(0.9, artifact_id="topic-2", text="alpha beta"),
+@pytest.mark.parametrize("fts_competitor", [False, True], ids=["single-candidate", "fts-competitor"])
+def test_one_scored_candidate_skips_gap_even_with_fts_competitors(fts_competitor: bool) -> None:
+    candidates = [_topic_candidate(1.0, text="alpha beta", relevance=0.5)]
+    if fts_competitor:
+        candidates.append(_topic_candidate(0.9, artifact_id="topic-2", text="alpha beta"))
+    assessment = RecallSufficiencyGate().assess(
+        candidates, "alpha beta", RecallSufficiencyPolicy(min_candidates=len(candidates))
     )
-    assessment = RecallSufficiencyGate().assess(candidates, "alpha beta", RecallSufficiencyPolicy())
     assert assessment.reason == REASON_SUFFICIENT
     assert assessment.signals.scored_families == 1
     assert assessment.signals.gap_families == 0

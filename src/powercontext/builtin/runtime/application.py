@@ -911,7 +911,7 @@ class ScopedContextApplication:
         The controlled expansion loop lives here. It runs at most ``policy.max_rounds`` extra
         searches, each of which only lowers the admission floor for the families the caller
         already selected — never a new family, a larger ``limit``, or a different ``mode``.
-        Every gate or expansion error degrades to the round-zero candidate set.
+        Every gate or expansion error preserves the last committed candidate set.
 
         Returns ``(build, effort)``. The RFC 1560 trace is **not** a field of the build:
         ``_prepare`` returns ``build.context`` and discards the rest, so a field there would
@@ -1086,7 +1086,7 @@ class ScopedContextApplication:
         """Run the bounded expansion loop and return the winning candidates plus the trace.
 
         Candidates accumulate across rounds; only new identities are ever added, so an earlier
-        round's candidate is never removed. Any error returns the round-zero candidates unchanged
+        round's candidate is never removed. Any error returns the last committed candidates unchanged
         and records ``expansion-failed`` — the gate can never turn a successful prepare into a
         failure. For a consistent signal basis, ``candidates_by_round`` counts the *un-truncated*
         accumulated pool (no family is clamped while the gate is consulting it); the Builder
@@ -1118,6 +1118,9 @@ class ScopedContextApplication:
         added_generation_calls = 0
         admission_by_family = list(round_zero.admissions)
         last_signals = None
+        committed_memory = memory_candidates
+        committed_experience = experience_candidates
+        committed_topic = topic_memory_hits
         try:
             budget = builder.probe_budget(
                 request=request,
@@ -1182,33 +1185,36 @@ class ScopedContextApplication:
                     topic_memory_hits=tuple(accumulated_topic),
                     experience_hits=_flatten_scope_experience(experience_hits_by_scope, scope_ids),
                 )
+                staged_memory = _limit_expanded_memory_candidates(
+                    [
+                        PreparedMemoryCandidates(
+                            scope_id=scope_id,
+                            memory_ref=memory_ref_by_scope.get(scope_id),
+                            hits=tuple(memory_hits_by_scope.get(scope_id, ())),
+                        )
+                        for scope_id in scope_ids
+                    ],
+                    memory_candidates,
+                    builder.memory_candidate_limit,
+                )
+                staged_topic = tuple(accumulated_topic[: builder.topic_memory_candidate_limit])
+                staged_experience = _limit_expanded_experience_candidates(
+                    [
+                        PreparedExperienceCandidates(
+                            scope_id=scope_id,
+                            hits=tuple(experience_hits_by_scope.get(scope_id, ())),
+                        )
+                        for scope_id in scope_ids
+                    ],
+                    experience_candidates,
+                    builder.experience_candidate_limit,
+                )
                 budget = builder.probe_budget(
                     request=request,
                     current_scope_id=self.scope_id,
-                    memory_candidates=_limit_expanded_memory_candidates(
-                        [
-                            PreparedMemoryCandidates(
-                                scope_id=scope_id,
-                                memory_ref=memory_ref_by_scope.get(scope_id),
-                                hits=tuple(memory_hits_by_scope.get(scope_id, ())),
-                            )
-                            for scope_id in scope_ids
-                        ],
-                        memory_candidates,
-                        builder.memory_candidate_limit,
-                    ),
-                    topic_memory_hits=tuple(accumulated_topic[: builder.topic_memory_candidate_limit]),
-                    experience_candidates=_limit_expanded_experience_candidates(
-                        [
-                            PreparedExperienceCandidates(
-                                scope_id=scope_id,
-                                hits=tuple(experience_hits_by_scope.get(scope_id, ())),
-                            )
-                            for scope_id in scope_ids
-                        ],
-                        experience_candidates,
-                        builder.experience_candidate_limit,
-                    ),
+                    memory_candidates=staged_memory,
+                    topic_memory_hits=staged_topic,
+                    experience_candidates=staged_experience,
                     profile_candidates=profile_candidates,
                 )
                 assessment = gate.assess(
@@ -1219,6 +1225,9 @@ class ScopedContextApplication:
                     budget=budget,
                     families_expected=families_expected,
                 )
+                committed_memory = staged_memory
+                committed_experience = staged_experience
+                committed_topic = staged_topic
                 expansions.append(plan.action)
                 added_embeddings += issued.embedding_calls
                 added_generation_calls += issued.generation_calls
@@ -1233,11 +1242,12 @@ class ScopedContextApplication:
                 and len(expansions) >= policy.max_rounds
             ):
                 assessment = replace(assessment, reason=REASON_AT_MAX_ROUNDS)
+            reason = assessment.reason
         except Exception as error:
             log_safely(
                 logger,
                 logging.ERROR,
-                "Recall sufficiency expansion failed; keeping the round-zero candidates",
+                "Recall sufficiency expansion failed; keeping the last committed candidates",
                 exc_info=error,
                 extra={
                     "event": "context.recall_gate.expansion_failed",
@@ -1245,56 +1255,20 @@ class ScopedContextApplication:
                     "unit": "context",
                 },
             )
-            return (
-                memory_candidates,
-                experience_candidates,
-                topic_memory_hits,
-                recall_effort(
-                    policy=policy,
-                    assessment=REASON_EXPANSION_FAILED,
-                    expansion_actions=expansions,
-                    candidates_by_round=candidates_by_round,
-                    admission_by_family=admission_by_family,
-                    added_embeddings=added_embeddings,
-                    added_generation_calls=added_generation_calls,
-                    signals=last_signals,
-                ),
-            )
-        capped_topic = tuple(accumulated_topic[: builder.topic_memory_candidate_limit])
+            reason = REASON_EXPANSION_FAILED
         return (
-            _limit_expanded_memory_candidates(
-                [
-                    PreparedMemoryCandidates(
-                        scope_id=scope_id,
-                        memory_ref=memory_ref_by_scope.get(scope_id),
-                        hits=tuple(memory_hits_by_scope.get(scope_id, ())),
-                    )
-                    for scope_id in scope_ids
-                ],
-                memory_candidates,
-                builder.memory_candidate_limit,
-            ),
-            _limit_expanded_experience_candidates(
-                [
-                    PreparedExperienceCandidates(
-                        scope_id=scope_id,
-                        hits=tuple(experience_hits_by_scope.get(scope_id, ())),
-                    )
-                    for scope_id in scope_ids
-                ],
-                experience_candidates,
-                builder.experience_candidate_limit,
-            ),
-            capped_topic,
+            committed_memory,
+            committed_experience,
+            committed_topic,
             recall_effort(
                 policy=policy,
-                assessment=assessment.reason,
+                assessment=reason,
                 expansion_actions=expansions,
                 candidates_by_round=candidates_by_round,
                 admission_by_family=admission_by_family,
                 added_embeddings=added_embeddings,
                 added_generation_calls=added_generation_calls,
-                signals=assessment.signals,
+                signals=last_signals,
             ),
         )
 

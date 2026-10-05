@@ -103,10 +103,8 @@ class AdmissionFloor:
     module and ``0.3`` mirrored by ``memory/fusion.py`` and ``topic_memory/fusion.py`` — so
     that a ``floor=None`` / ``admission=None`` call reproduces today's behaviour bit for bit.
 
-    This type plays the ``RecallAdmissionPolicy`` role described by RFC 1560: it is the value
-    threaded into each searchable family's search to override its floor. Passing ``None``
-    (the historical default) is therefore equivalent to the RFC's ``RecallAdmissionPolicy()``
-    with both overrides unset, which is exactly what round 0 does.
+    RFC 1560 threads this value into each searchable family's search to override its floor.
+    Round zero passes ``None`` to keep the historical defaults.
     """
 
     lexical_coverage: float = _FTS_MIN_QUERY_COVERAGE
