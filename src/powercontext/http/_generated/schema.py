@@ -870,7 +870,9 @@ OPENAPI_SCHEMA: dict[str, JsonValue] = {
                     "200": {
                         "description": "Final context ready for direct injection, or a normal empty result.",
                         "headers": {"X-PowerContext-Request-ID": {"$ref": "#/components/headers/RequestId"}},
-                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PreparedContext"}}},
+                        "content": {
+                            "application/json": {"schema": {"$ref": "#/components/schemas/PreparedContextWithGate"}}
+                        },
                     },
                     "401": {"$ref": "#/components/responses/Unauthorized"},
                     "403": {"$ref": "#/components/responses/Forbidden"},
@@ -6606,6 +6608,17 @@ OPENAPI_SCHEMA: dict[str, JsonValue] = {
                     "status": {"$ref": "#/components/schemas/PreparedContextStatus"},
                     "content": {"type": "string", "nullable": True},
                     "content_bytes": {"type": "integer", "minimum": 0.0},
+                },
+                "additionalProperties": False,
+                "type": "object",
+                "required": ["schema", "status", "content", "content_bytes"],
+            },
+            "PreparedContextWithGate": {
+                "properties": {
+                    "schema": {"$ref": "#/components/schemas/PreparedContextSchema"},
+                    "status": {"$ref": "#/components/schemas/PreparedContextStatus"},
+                    "content": {"type": "string", "nullable": True},
+                    "content_bytes": {"type": "integer", "minimum": 0.0},
                     "recall_gate": {
                         "$ref": "#/components/schemas/RecallGateResult",
                         "description": "Aggregate "
@@ -6639,6 +6652,16 @@ OPENAPI_SCHEMA: dict[str, JsonValue] = {
                 "additionalProperties": False,
                 "type": "object",
                 "required": ["schema", "status", "content", "content_bytes"],
+                "description": "PreparedContext plus the "
+                "opt-in aggregate "
+                "recall-gate verdict. Only "
+                "the context-prepare "
+                "endpoint returns this "
+                "shape, and recall_gate is "
+                "present only when the "
+                "request sets "
+                "include_recall_gate and "
+                "the gate loop ran.",
             },
             "RecallGateResult": {
                 "properties": {

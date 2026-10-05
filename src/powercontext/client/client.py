@@ -131,6 +131,7 @@ from powercontext.http import (
     MemoryMutationResponse,
     PrepareContextRequest,
     PreparedContext,
+    PreparedContextWithGate,
     PreparedHandoff,
     PreparedWorkHandoff,
     PrepareHandoffHintRequest,
@@ -924,7 +925,7 @@ class PowerContextClient:
         """Read bounded native code evidence for an explicitly authorized Scope."""
         return await self._request(QUERY_CODE, request, path_parameters={"scope_id": scope_id})
 
-    async def prepare_context(self, request: PrepareContextRequest) -> PreparedContext:
+    async def prepare_context(self, request: PrepareContextRequest) -> PreparedContextWithGate:
         """Prepare final bounded context for one Agent turn."""
 
         return await self._request(PREPARE_CONTEXT, request)

@@ -239,6 +239,7 @@ from powercontext.http import (
     MemoryUsedSearchMode,
     PreparedContextSchema,
     PreparedContextStatus,
+    PreparedContextWithGate,
     PreparedHandoffSchema,
     PreparedWorkHandoff,
     PrepareHandoffRequest,
@@ -843,6 +844,15 @@ def topic_memory_response(value: PublishedTopicMemory) -> TopicMemoryArtifact:
 
 
 def prepared_context_response(value: PreparedContext) -> TransportPreparedContext:
+    return TransportPreparedContext.model_validate({
+        "schema": PreparedContextSchema(value.schema_version),
+        "status": PreparedContextStatus(value.status),
+        "content": value.content,
+        "content_bytes": value.content_bytes,
+    })
+
+
+def prepare_context_response(value: PreparedContext) -> PreparedContextWithGate:
     payload: dict[str, Any] = {
         "schema": PreparedContextSchema(value.schema_version),
         "status": PreparedContextStatus(value.status),
@@ -851,7 +861,7 @@ def prepared_context_response(value: PreparedContext) -> TransportPreparedContex
     }
     if value.recall_gate is not None:
         payload["recall_gate"] = value.recall_gate.model_dump(mode="json")
-    return TransportPreparedContext.model_validate(payload)
+    return PreparedContextWithGate.model_validate(payload)
 
 
 def entries_response(value: MemoryEntriesPage) -> ListMemoryEntriesResponse:

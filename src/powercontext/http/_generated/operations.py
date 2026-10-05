@@ -109,6 +109,7 @@ from powercontext.http._generated.models import (
     MemoryMutationResponse,
     PrepareContextRequest,
     PreparedContext,
+    PreparedContextWithGate,
     PreparedHandoff,
     PreparedWorkHandoff,
     PrepareHandoffHintRequest,
@@ -806,14 +807,14 @@ QUERY_CODE = Operation[CodeQueryRequest, CodeQueryResponse](
     access=AccessRequirement(action="scope.read", resource="scope", scope_id_field="scope_id", resolver="request"),
 )
 
-PREPARE_CONTEXT = Operation[PrepareContextRequest, PreparedContext](
+PREPARE_CONTEXT = Operation[PrepareContextRequest, PreparedContextWithGate](
     method="POST",
     path="/v1/context/prepare",
     operation_id="prepare_context",
     request_type=PrepareContextRequest,
     request_location="body",
     path_parameters=(),
-    response_type=PreparedContext,
+    response_type=PreparedContextWithGate,
     success_status=200,
     summary="Prepare bounded context for an Agent turn",
     tags=("context",),

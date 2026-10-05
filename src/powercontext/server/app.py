@@ -490,6 +490,7 @@ from powercontext.http import (
     MemoryMutationResponse,
     PrepareContextRequest,
     PreparedContext,
+    PreparedContextWithGate,
     PreparedWorkHandoff,
     PrepareHandoffHintRequest,
     PrepareHandoffRequest,
@@ -2918,7 +2919,7 @@ async def prepare_context(
     request: PrepareContextRequest,
     application: Annotated[ServerApplication, Depends(_require_application)],
     http_request: Request,
-) -> PreparedContext:
+) -> PreparedContextWithGate:
     prepared_request = mapping.prepare_context_request(request)
     scoped = application.context.for_scope(request.scope_id)
     access = access_control_for_mode(
@@ -2939,7 +2940,7 @@ async def prepare_context(
                 await require_scope_content_ready(http_request, scope_id)
 
         result = await scoped.prepare(prepared_request, authorize_scopes=authorize_scopes)
-    return mapping.prepared_context_response(result)
+    return mapping.prepare_context_response(result)
 
 
 async def create_work_contract(

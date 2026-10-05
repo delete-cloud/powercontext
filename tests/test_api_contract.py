@@ -65,6 +65,7 @@ from powercontext.http import (
     MemoryCapacity,
     PrepareContextRequest,
     PreparedContext,
+    PreparedContextWithGate,
     PreparedHandoff,
     PreparedWorkHandoff,
     PrepareHandoffRequest,
@@ -129,6 +130,7 @@ from powercontext.http._generated.operations import (
     LIST_REMOTE_SKILL_TARGETS,
     PREPARE_CONTEXT,
     PREPARE_HANDOFF,
+    PREPARE_HANDOFF_HINT,
     PROPOSE_EXPERIENCE,
     PROPOSE_SKILL,
     PROPOSE_SKILL_PACKAGE,
@@ -469,8 +471,9 @@ def test_access_contract_uses_logical_resources_and_generic_skill_read_access() 
 def test_prepared_context_is_a_generic_typed_operation_outside_the_mcp_memory_tools() -> None:
     assert PREPARE_CONTEXT.path == "/v1/context/prepare"
     assert PREPARE_CONTEXT.request_type is PrepareContextRequest
-    assert PREPARE_CONTEXT.response_type is PreparedContext
+    assert PREPARE_CONTEXT.response_type is PreparedContextWithGate
     assert PREPARE_CONTEXT.success_status == 200
+    assert PREPARE_HANDOFF_HINT.response_type is PreparedContext
 
     contract = yaml.safe_load(CONTRACT_PATH.read_text())
     schemas = contract["components"]["schemas"]
@@ -483,6 +486,12 @@ def test_prepared_context_is_a_generic_typed_operation_outside_the_mcp_memory_to
         "include_recall_gate",
     }
     assert set(schemas["PreparedContext"]["properties"]) == {
+        "schema",
+        "status",
+        "content",
+        "content_bytes",
+    }
+    assert set(schemas["PreparedContextWithGate"]["properties"]) == {
         "schema",
         "status",
         "content",

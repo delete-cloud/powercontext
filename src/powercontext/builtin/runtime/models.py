@@ -268,7 +268,7 @@ class PreparedContext(_PreparedContextModel):
     status: PreparedContextStatus
     content: str | None
     content_bytes: Annotated[int, Field(ge=0)]
-    recall_gate: RecallGateResult | None = None
+    recall_gate: RecallGateResult | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def validate_content(self) -> PreparedContext:

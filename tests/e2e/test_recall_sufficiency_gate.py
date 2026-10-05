@@ -66,7 +66,7 @@ from powercontext.builtin.runtime.recall_sufficiency import (
     RecallSufficiencyGate,
 )
 from powercontext.builtin.scope import ScopeDraft
-from powercontext.server.mapping import prepared_context_response
+from powercontext.server.mapping import prepare_context_response, prepared_context_response
 
 # A three-term query is required: the round-zero floor only differs from the round-one floor
 # once the query has more than two Analyzer terms (``fts_query_requirements`` clamps a short
@@ -245,7 +245,8 @@ def test_prepare_exposes_only_aggregate_gate_result_when_assessed(tmp_path) -> N
             await _seed(disabled, scope_id, ["alpha beta gamma secret evidence", "alpha beta gamma second"])
             without_gate = await disabled.context.for_scope(scope_id).prepare(request)
             assert without_gate.recall_gate is None
-            assert prepared_context_response(without_gate).recall_gate is None
+            assert prepare_context_response(without_gate).recall_gate is None
+            assert "recall_gate" not in prepared_context_response(without_gate).model_dump(by_alias=True)
 
         async with _runtime(database, RuntimeConfig(recall_gate_enabled=True)) as enabled:
             assert (await enabled.context.for_scope(scope_id).prepare(request)).recall_gate is None
@@ -260,7 +261,8 @@ def test_prepare_exposes_only_aggregate_gate_result_when_assessed(tmp_path) -> N
             assert result["top_relevance"] is None  # This scenario uses SQLite FTS only.
             assert "secret" not in str(result)
             assert "entry" not in str(result)
-            assert prepared_context_response(with_gate).recall_gate is not None
+            assert prepare_context_response(with_gate).recall_gate is not None
+            assert "recall_gate" in prepare_context_response(with_gate).model_dump(by_alias=True)
 
             skipped = await enabled.context.for_scope(scope_id).prepare(
                 PrepareContextRequest.model_validate({"query": _QUERY, "assembly": {"sections": []}})

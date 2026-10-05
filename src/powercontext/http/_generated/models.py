@@ -3142,6 +3142,16 @@ class PreparedContext(BaseModel):
     status: PreparedContextStatus
     content: Annotated[StrictStr | None, Field(...)]
     content_bytes: Annotated[StrictInt, Field(ge=0)]
+
+
+class PreparedContextWithGate(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    schema_: Annotated[PreparedContextSchema, Field(alias="schema")]
+    status: PreparedContextStatus
+    content: Annotated[StrictStr | None, Field(...)]
+    content_bytes: Annotated[StrictInt, Field(ge=0)]
     recall_gate: Annotated[
         RecallGateResult | None,
         Field(

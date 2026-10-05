@@ -931,7 +931,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PreparedContext"
+                $ref: "#/components/schemas/PreparedContextWithGate"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -7058,6 +7058,22 @@ components:
       type: object
       additionalProperties: false
       required: [schema, status, content, content_bytes]
+      properties:
+        schema:
+          $ref: "#/components/schemas/PreparedContextSchema"
+        status:
+          $ref: "#/components/schemas/PreparedContextStatus"
+        content:
+          type: string
+          nullable: true
+        content_bytes:
+          type: integer
+          minimum: 0
+    PreparedContextWithGate:
+      type: object
+      additionalProperties: false
+      required: [schema, status, content, content_bytes]
+      description: PreparedContext plus the opt-in aggregate recall-gate verdict. Only the context-prepare endpoint returns this shape, and recall_gate is present only when the request sets include_recall_gate and the gate loop ran.
       properties:
         schema:
           $ref: "#/components/schemas/PreparedContextSchema"
