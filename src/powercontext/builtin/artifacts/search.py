@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared deterministic lexical analysis for built-in Artifact projections."""
+"""Shared deterministic lexical and vector admission for built-in Artifact projections."""
 
 from __future__ import annotations
 
@@ -115,6 +115,12 @@ class AdmissionFloor:
 
 
 DEFAULT_ADMISSION_FLOOR = AdmissionFloor()
+
+
+def unit_l2_cosine_similarity(distance: float) -> float:
+    """Convert L2 distance between unit vectors to cosine similarity."""
+
+    return max(-1.0, min(1.0, 1.0 - distance**2 / 2.0))
 
 
 @dataclass(frozen=True)
@@ -300,4 +306,5 @@ __all__ = [
     "analyze_text_with_spans",
     "fts_match_query",
     "fts_query_requirements",
+    "unit_l2_cosine_similarity",
 ]

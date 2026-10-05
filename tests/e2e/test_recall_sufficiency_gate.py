@@ -23,6 +23,7 @@ re-admits, which is exactly the behaviour the gate exists to drive.
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -132,12 +133,16 @@ class _RecallRoundLog:
 
 
 @asynccontextmanager
-async def _runtime(database: Path, runtime: RuntimeConfig | None = None) -> AsyncIterator[BuiltinRuntime]:
+async def _runtime(
+    database: Path, runtime: RuntimeConfig | None = None, *, embedding_model: Any = None
+) -> AsyncIterator[BuiltinRuntime]:
     config = BuiltinConfig(
         database=SQLiteConfig(url=f"sqlite+aiosqlite:///{database}"),
         runtime=runtime if runtime is not None else RuntimeConfig(),
     )
-    async with open_builtin_runtime(config, scheduler_path=database.with_suffix(".scheduler.db")) as opened:
+    async with open_builtin_runtime(
+        config, scheduler_path=database.with_suffix(".scheduler.db"), embedding_model=embedding_model
+    ) as opened:
         yield opened
 
 
@@ -242,7 +247,10 @@ def test_prepare_exposes_only_aggregate_gate_result_when_assessed(tmp_path) -> N
             assert prepared_context_response(without_gate).recall_gate is None
 
         async with _runtime(database, RuntimeConfig(recall_gate_enabled=True)) as enabled:
-            with_gate = await enabled.context.for_scope(scope_id).prepare(request)
+            assert (await enabled.context.for_scope(scope_id).prepare(request)).recall_gate is None
+            with_gate = await enabled.context.for_scope(scope_id).prepare(
+                request.model_copy(update={"include_recall_gate": True})
+            )
             assert with_gate.recall_gate is not None
             result = with_gate.recall_gate.model_dump(mode="json")
             assert set(result) == {"reason", "rounds", "candidate_count", "top_relevance", "lexical_overlap"}
@@ -257,6 +265,44 @@ def test_prepare_exposes_only_aggregate_gate_result_when_assessed(tmp_path) -> N
                 PrepareContextRequest.model_validate({"query": _QUERY, "assembly": {"sections": []}})
             )
             assert skipped.recall_gate is None
+
+    asyncio.run(scenario())
+
+
+def test_sqlite_vector_prepare_reports_cosine_and_stops_unimprovable_score_expansion(tmp_path, monkeypatch) -> None:
+    embedding_profile = EmbeddingProfile(
+        profile_id="recall-gate-vector", model="deterministic", dimension=2, distance="l2", normalization="unit"
+    )
+
+    class DeterministicEmbedding:
+        profile = embedding_profile
+
+        async def embed(self, texts: tuple[str, ...], /) -> EmbeddingResult:
+            return EmbeddingResult(
+                vectors=tuple((1.0, 0.0) if text == _QUERY else (0.31, math.sqrt(1.0 - 0.31**2)) for text in texts)
+            )
+
+    log = _RecallRoundLog()
+    log.force_recoverable_family = MEMORY_FAMILY
+    log.install(monkeypatch)
+
+    async def scenario() -> None:
+        database = tmp_path / "vector-gate.db"
+        async with _runtime(
+            database,
+            RuntimeConfig(recall_gate_enabled=True, recall_gate_min_candidates=1),
+            embedding_model=DeterministicEmbedding(),
+        ) as runtime:
+            scope_id = await _create_scope(runtime, "vector-gate")
+            await _seed(runtime, scope_id, ["alpha beta gamma vector evidence"])
+            prepared = await runtime.context.for_scope(scope_id).prepare(
+                _memory_request().model_copy(update={"include_recall_gate": True})
+            )
+        assert prepared.recall_gate is not None
+        assert prepared.recall_gate.top_relevance == pytest.approx(0.31, abs=0.005)
+        assert prepared.recall_gate.reason == "weak-top-1"
+        assert prepared.recall_gate.rounds == 1
+        assert len(log.calls) == 1
 
     asyncio.run(scenario())
 
@@ -656,12 +702,22 @@ def test_later_round_failure_preserves_committed_expansion_trace(tmp_path, monke
             RuntimeConfig(recall_gate_enabled=True, recall_gate_min_candidates=100),
         ) as runtime:
             build, effort = await _prepare_build(runtime, scope_id, request)
+            calls = 0
+            exposed = await runtime.context.for_scope(scope_id).prepare(
+                request.model_copy(update={"include_recall_gate": True})
+            )
 
         assert effort is not None
         assert effort.assessment == REASON_EXPANSION_FAILED
         assert effort.rounds == 2
         assert effort.expansion_actions == ("admission",)
         assert len(effort.candidates_by_round) == 2
+        assert effort.signals is not None
+        assert effort.signals.candidate_count == effort.candidates_by_round[-1]
+        assert exposed.recall_gate is not None
+        assert exposed.recall_gate.reason == REASON_EXPANSION_FAILED
+        assert exposed.recall_gate.rounds == 2
+        assert exposed.recall_gate.candidate_count == effort.candidates_by_round[-1]
         assert calls == 3
         assert build.context.content == baseline.context.content
         assert build.origins == baseline.origins

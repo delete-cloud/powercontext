@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 from powercontext.builtin.artifacts.experience import ExperienceSearchHit, experience_search_text
 from powercontext.builtin.artifacts.memory import MemoryHit
 from powercontext.builtin.artifacts.search import (
+    DEFAULT_ADMISSION_FLOOR,
     AdmissionCounts,
     AdmissionFloor,
     analyze_text,
@@ -71,15 +72,16 @@ BUDGET_FLOOR_BYTES = 512
 _RRF_CONSTANT = 60
 # Topic Memory relevance is already normalized against its reachable upper bound.
 _TOPIC_SCORE_SCALE = 100.0
+_STRONG_TOP_RELEVANCE = 0.7
 
 
 @dataclass(frozen=True)
 class RecallCandidate:
     """One family-local retrieval result, projected for model-free assessment.
 
-    ``score`` retains the family-local fused ranking value. ``relevance`` is the cosine
-    similarity of the best admitted vector channel, when one exists. Only relevance enters
-    the gate's score thresholds.
+    ``score`` retains the family-local normalized RRF rank value for candidate captures and
+    existing consumers. ``relevance`` is the cosine similarity of the best admitted vector
+    channel, when one exists. Only relevance enters the gate's score thresholds.
     """
 
     family: str
@@ -99,6 +101,8 @@ class RecallSignals:
     ``top_score``, ``mean_score`` and ``top_gap`` measure vector cosine relevance, regardless
     of the families' different fused-score scales. ``lexical_overlap`` is the query-term
     recall of the single best candidate (its overlap is the maximum over candidates).
+    A family contributes to these score signals only when its first fused hit has vector
+    evidence. The gap uses candidates above the round-zero semantic floor.
 
     ``distinct_source_count`` counts family-specific evidence identities via
     :func:`candidate_identity` — a Memory entry (``memory_ref`` + ``entry_id`` +
@@ -259,7 +263,7 @@ class RecallEffort:
     """In-process trace of the recall loop; never persisted.
 
     The trace is delivered to the Runtime's optional ``RecallEffortSink``. A small aggregate
-    assessment is also projected onto PreparedContext.
+    assessment is also projected onto PreparedContext when the request opts in.
     It is **not** attached to ``PreparedContextBuild``: ``_prepare`` returns ``build.context``
     and discards the rest of the build result, so a field there would have no production
     observer.
@@ -268,8 +272,9 @@ class RecallEffort:
     admission totals. There is no query text, no entry id and no per-entry attribution, so the
     value cannot leak evidence through a trace.
 
-    ``rounds`` counts the search passes actually executed, so it is ``1 + len(expansion_actions)``
-    (1..3): round 0 always runs and each *committed* expansion adds one. ``candidates_by_round``
+    ``rounds`` counts assessed, committed search passes, so it is ``1 + len(expansion_actions)``
+    (1..3): round 0 always runs and each committed expansion adds one. A failed pass that did
+    not finish assessment does not add a round. ``candidates_by_round``
     holds the accumulated candidate-pool size the gate saw after each committed round, so
     ``len(candidates_by_round) == rounds``; it measures the **un-truncated** accumulated pool
     the gate assessed, not the subset the Builder finally selected (the Builder is called once,
@@ -454,7 +459,9 @@ class RecallSufficiencyGate:
         if families_expected > 1 and signals.family_count < families_expected:
             return GateAssessment(sufficient=False, reason=REASON_THIN_FAMILIES, signals=signals)
         if (signals.scored_families > 0 and signals.top_score < policy.min_top_score) or (
-            signals.gap_families > 0 and signals.top_gap < policy.min_top_gap
+            signals.gap_families > 0
+            and signals.top_score < _STRONG_TOP_RELEVANCE
+            and signals.top_gap < policy.min_top_gap
         ):
             return GateAssessment(sufficient=False, reason=REASON_WEAK_TOP_ONE, signals=signals)
         if signals.lexical_overlap < policy.min_lexical_overlap:
@@ -521,12 +528,10 @@ def _lexical_overlap(candidates: Sequence[RecallCandidate], query: str) -> float
 def _score_signals(candidates: Sequence[RecallCandidate]) -> tuple[float, float, float, int, int]:
     """Aggregate cosine relevance over families with admitted vector hits.
 
-    Returns ``(top_score, mean_score, top_gap, scored_families, gap_families)``. ``top_score`` is the maximum
-    family top and ``top_gap`` the maximum family-local ``top - mean``. ``mean_score`` is the mean
-    of all scored candidates pooled across scored families — a different basis from the
-    family-local ``top_gap`` — and is reported **for observation only; it never takes part in the
-    verdict**. When no family exposes a score the caller must skip the score signal entirely
-    (``scored_families == 0``), so the aggregate values here stay ``0.0`` rather than fabricated.
+    A family's fused first hit must have vector evidence before its score signal is known.
+    The gap uses only candidates above the round-zero semantic admission floor, so lowering
+    that floor cannot manufacture a larger gap. ``mean_score`` pools all known vector scores
+    for observation only. A family with fewer than two baseline scores cannot produce a gap.
     """
 
     top_score = -1.0
@@ -535,20 +540,21 @@ def _score_signals(candidates: Sequence[RecallCandidate]) -> tuple[float, float,
     gap_families = 0
     all_scores: list[float] = []
     for family in _SCORING_FAMILIES:
+        first = next((candidate for candidate in candidates if candidate.family == family), None)
+        if first is None or first.relevance is None:
+            continue
         family_scores = [
             candidate.relevance
             for candidate in candidates
             if candidate.family == family and candidate.relevance is not None
         ]
-        if not family_scores:
-            continue
         scored_families += 1
         family_top = max(family_scores)
-        family_mean = sum(family_scores) / len(family_scores)
         top_score = max(top_score, family_top)
-        if len(family_scores) > 1:
+        baseline_scores = [score for score in family_scores if score >= DEFAULT_ADMISSION_FLOOR.min_semantic_similarity]
+        if len(baseline_scores) > 1:
             gap_families += 1
-            top_gap = max(top_gap, family_top - family_mean)
+            top_gap = max(top_gap, max(baseline_scores) - sum(baseline_scores) / len(baseline_scores))
         all_scores.extend(family_scores)
     mean_score = sum(all_scores) / len(all_scores) if all_scores else 0.0
     return (top_score if all_scores else 0.0), mean_score, top_gap, scored_families, gap_families

@@ -20,7 +20,13 @@ import unicodedata
 from collections import Counter
 from collections.abc import Sequence
 
-from powercontext.builtin.artifacts.search import AdmissionFloor, admits_fts_text, analyze_text, analyze_text_with_spans
+from powercontext.builtin.artifacts.search import (
+    AdmissionFloor,
+    admits_fts_text,
+    analyze_text,
+    analyze_text_with_spans,
+    unit_l2_cosine_similarity,
+)
 from powercontext.builtin.artifacts.topic_memory.models import (
     TopicMemoryChannelHit,
     TopicMemoryFusionOutcome,
@@ -122,7 +128,7 @@ def _fuse_topic_memory_rankings(
             scores[identity] = scores.get(identity, 0.0) + 1.0 / (_RRF_CONSTANT + rank)
             matched.setdefault(identity, set()).add(channel)
             if channel in ("topic_vector", "detail_vector") and candidate.distance is not None:
-                similarity = max(-1.0, min(1.0, 1.0 - candidate.distance**2 / 2.0))
+                similarity = unit_l2_cosine_similarity(candidate.distance)
                 relevance[identity] = max(relevance.get(identity, -1.0), similarity)
 
     ordered = sorted(
@@ -209,7 +215,7 @@ def admits_topic_memory_vector_distance(
     """
 
     baseline = _MIN_SEMANTIC_SIMILARITY if floor is None else floor.min_semantic_similarity
-    return max(-1.0, min(1.0, 1.0 - distance**2 / 2.0)) >= baseline
+    return unit_l2_cosine_similarity(distance) >= baseline
 
 
 def _snippet(query: str, value: str, *, lexical: bool) -> str:

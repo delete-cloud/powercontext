@@ -21,16 +21,17 @@ and, when it is not, run at most two controlled expansion rounds. Both rounds lo
 the candidates each participating family's search has already retrieved. Selection then happens inside the **same**
 caller-provided budget.
 
-The gate uses no model, never changes the caller's budget, never changes the public `PreparedContext` contract, and
-fails open to current behaviour.
+The gate uses no model, never changes the caller's budget, and fails open to current behaviour. The optional aggregate
+`recall_gate` result is returned only when the caller sets `include_recall_gate: true` and an assessment ran; ordinary
+requests retain the original four-field `PreparedContext` response.
 
 Three properties make the proposal safe to evaluate:
 
 - **Expansion cannot break the Builder invariant.** Merged candidates are re-selected down to each family's existing
   candidate ceiling using the allocators that already clamp round 0, so a cross-round union can never exceed the
   ceiling `build_scopes_result()` enforces (`prepared_context.py:164-169`).
-- **A run that does not expand is byte-identical to today.** The no-expansion path is unchanged, which is the
-  regression guarantee.
+- **A run that does not expand keeps its prepared content byte-identical.** Without the response opt-in, the HTTP
+  body also retains its original four-field shape.
 - **Delivered size never exceeds `max_bytes`.** Expansion may use budget the round-0 candidate set left unused, so
   `content_bytes` can *increase* within the ceiling; it can never cross it.
 
@@ -125,14 +126,15 @@ or comes from the counters this RFC adds; none requires a model call.
 | --- | --- | --- |
 | Retrieved vs. admitted per family and channel | The new admission counters | A family's admission floor discarded nearly everything it retrieved. |
 | Admitted candidates vs. that family's Builder ceiling | Round-zero hits and `prepared_context.py:103-105` | The family has room for a later round to contribute; a saturated family does not. |
-| Top-1 score and the gap to the mean over admitted candidates | Score-bearing families only: Memory (`MemoryHit.score`) and Topic Memory (`TopicMemorySearchHit.score`) | One plausible hit surrounded by noise, or no clear winner. |
+| Top vector cosine relevance and the family-local gap | Memory (`MemoryHit.relevance`) and Topic Memory (`TopicMemorySearchHit.relevance`), derived from unit-vector L2 distance; fused `score` remains a rank value | Whether the first fused hit has usable semantic evidence. The gap uses only candidates above the round-zero semantic floor and is checked only when the top relevance is below the 0.70 strong-match threshold. |
 | Lexical coverage of the top candidates in the analyzer's token space | `analyze_text` / `fts_query_requirements` (`search.py:78`) | Hits matched on stopwords or on one shared token only. |
 | Number of participating families that returned at least one admitted candidate | Round-zero results | An assembly that selected three families and got results from one. |
 | Distinct evidence identities within a family | Family-specific identity (see below) | Many candidates that are really the same evidence. |
 | Whether round zero's fit was budget-bound | The budget probe | Thin output caused by `max_bytes`, not by recall. |
 
-**Experience carries no score.** `ExperienceSearchHit` has exactly `artifact_ref` and `content`
-(`artifacts/experience/search.py:26-30`), so the score-based signals apply only to the score-bearing families.
+**Experience carries no vector relevance.** `ExperienceSearchHit` has exactly `artifact_ref` and `content`
+(`artifacts/experience/search.py:26-30`), so relevance thresholds skip Experience and families whose first fused hit
+is FTS-only.
 Experience contributes its admission counters, its candidate count against its ceiling, and its family-coverage bit.
 
 **Evidence identity is family-specific.** A single Memory search returns many `MemoryHit` values that all share one
@@ -188,8 +190,9 @@ that changed nothing. The constraint in that case is downstream — budget, not 
 
 ## What you can observe
 
-Following the precedent of the RFC 0080 `rerank` trace, the gate result stays in the process and is **not** added to the
-HTTP v1 response.
+The full `RecallEffort` trace stays in-process. A caller that explicitly sends `include_recall_gate: true` receives
+`PreparedContext.recall_gate` when the gate runs. It contains only the final reason code, committed rounds, candidate
+count, top vector relevance (or null), and lexical overlap (or null). It contains no query text or evidence identity.
 
 `RecallEffort` is produced by the expansion loop, which lives in `ScopedContextApplication._prepare`
 (`application.py:727`), not by the Builder. It is therefore **not** attached to `PreparedContextBuild`: `_prepare`
@@ -265,7 +268,7 @@ Content-Type: application/json
 }
 ```
 
-Round 0 returns three Memory candidates from a backend pool of 64, one with a usable score; admission admits three of
+Round 0 returns three Memory candidates from a backend pool of 64, one with usable vector relevance; admission admits three of
 64, which is far below the Memory ceiling of 16, so the family has room to grow. The budget probe finds unused bytes
 and no whole-item drops, so the output is recall-thin rather than budget-thin. The gate assesses `weak-top-1`, expands
 once (admission floor lowered), and round 1 admits four more candidates that the round-0 floor had discarded from the
@@ -283,10 +286,10 @@ that is flat, which is precisely the case `truncated_items` and `dropped_items` 
 | Assess sufficiency with model-free signals | Add a model call to assembly (RFC 1489 keeps assembly model-free) |
 | Expand at most twice, with a bounded cumulative cost | Retry indefinitely or loop |
 | Search harder inside the existing candidate ceilings | Exceed `memory_candidate_limit` / `experience_candidate_limit` |
-| Keep the caller's `max_bytes` as the only output budget | Change `PreparedContext(schema, status, content, content_bytes)` |
+| Keep the caller's `max_bytes` as the only output budget | Change the four-field response for callers that do not opt in |
 | Re-select the merged set down to each family's ceiling | Let a cross-round union break the Builder invariant |
 | Use unused budget within `max_bytes` when expansion supplies usable evidence | Deliver more than `max_bytes` |
-| Report effort through an in-process sink | Change the HTTP v1 response |
+| Report full effort through an in-process sink and an opted-in aggregate verdict | Put query text or evidence identity in the HTTP response |
 | Degrade to today's behaviour on any error | Make expansion a new failure mode |
 
 # Reference-level explanation
@@ -382,10 +385,10 @@ The counts and the floor override have to reach the three admission sites. None 
 None = None` keyword that replaces the derived required-match count and the `0.3` cosine baseline, and it reports
 `retrieved = len(channels.fts) + len(channels.vector)` together with `admitted = len(admitted_fts) +
 len(admitted_vector)`. The counts are exposed on an in-process-only field of `MemorySearchResult`
-(`memory/models.py:165-169`). The HTTP contract is untouched because the response is built from `MemorySearchPage`
+(`memory/models.py:165-169`). The Memory search response is untouched because it is built from `MemorySearchPage`
 (`runtime/models.py:183-189`, constructed at `application.py:1738` and `:1761`) by `search_response`
 (`server/mapping.py:788`), which enumerates its fields explicitly; the counters must stay off `MemorySearchPage` and out
-of `openapi/powercontext.yaml`, so `make api-generate` is not required.
+of `openapi/powercontext.yaml`. The separate opted-in `PreparedContext` response change does require `make api-generate`.
 
 **Experience.** The Runtime recalls Experience through the `experience_recall` callback
 (`application.py:862-878`), which today returns a bare `tuple[ExperienceSearchHit, ...]`. It must return an outcome
@@ -469,7 +472,7 @@ read-only for the first scope. Any cross-session variant of this trace therefore
 `truncated_items` and `dropped_items` are aggregate counters over one call — never per-entry attribution and never a
 verdict about an entry. That distinction is deliberate, because #1554 has already ruled that an entry losing to the byte
 budget is **not** a negative result about that entry. This RFC counts the omission only to interpret its own expansion,
-records no `candidate_not_selected`-style signal, and adds no field to the HTTP contract.
+records no `candidate_not_selected`-style signal, and exposes no per-entry field in the HTTP contract.
 
 One correction worth recording, because it bears on how that future RFC must be argued: the fact that
 `RelationalRecallTokenEstimator` resolves recall lineage inside prepare (`recall.py:106`) is **not** a precedent for
@@ -574,10 +577,10 @@ the gate runs before selection, a failure costs at most an extra search, never a
 
 ## Compatibility and API impact
 
-`PreparedContext` keeps its four fields and `openapi/powercontext.yaml` is unchanged, so `make api-generate` is not
-required: the admission counters live on an in-process value of `MemorySearchResult` and never reach the HTTP
-projection built by `search_response` (`server/mapping.py:788`). `PreparedContextBuild` is unchanged. The changes are
-internal and in-process:
+`openapi/powercontext.yaml` defines the optional `include_recall_gate` request flag and `recall_gate` response field;
+generated HTTP models are refreshed with `make api-generate`. The flag defaults to false. When it is absent, or the gate
+did not run, the HTTP response omits `recall_gate` entirely, preserving strict older SDK and host parsers. The full
+trace and admission counters remain in-process; `PreparedContextBuild` does not carry the trace. Internal changes include:
 
 - an optional `admission` parameter and in-process counters on the Memory search entry point;
 - an outcome value (hits plus counts) replacing the bare tuple returned by the `experience_recall` and Topic Memory
@@ -590,7 +593,7 @@ The feature is off by default and enabled by Runtime configuration.
 ## Testing
 
 Gate, expander and budget probe are tested as pure functions, including the signal computations for a family with no
-score (Experience), a family whose admission admitted nothing, and a family already at its ceiling.
+vector relevance (Experience), a family whose admission admitted nothing, and a family already at its ceiling.
 
 Runtime-level tests assert, for a fixed candidate set and a fixed budget:
 

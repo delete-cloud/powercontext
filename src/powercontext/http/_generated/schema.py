@@ -6625,7 +6625,23 @@ OPENAPI_SCHEMA: dict[str, JsonValue] = {
                         "type": "number",
                         "maximum": 1.0,
                         "minimum": -1.0,
-                        "description": "Best admitted vector cosine similarity, or null if none was available.",
+                        "description": "Best "
+                        "cosine "
+                        "similarity "
+                        "among "
+                        "families "
+                        "whose "
+                        "first "
+                        "fused "
+                        "hit "
+                        "has "
+                        "vector "
+                        "evidence, "
+                        "or "
+                        "null "
+                        "if "
+                        "none "
+                        "qualified.",
                         "nullable": True,
                     },
                     "lexical_overlap": {
@@ -8096,6 +8112,31 @@ OPENAPI_SCHEMA: dict[str, JsonValue] = {
                         "built "
                         "during "
                         "preparation.",
+                        "default": False,
+                    },
+                    "include_recall_gate": {
+                        "type": "boolean",
+                        "description": "Opt "
+                        "into "
+                        "the "
+                        "aggregate "
+                        "recall "
+                        "gate "
+                        "verdict "
+                        "when "
+                        "the "
+                        "gate "
+                        "runs. "
+                        "Omit "
+                        "to "
+                        "retain "
+                        "the "
+                        "four-field "
+                        "PreparedContext "
+                        "response "
+                        "for "
+                        "existing "
+                        "clients.",
                         "default": False,
                     },
                     "assembly": {"$ref": "#/components/schemas/ContextAssembly"},

@@ -491,7 +491,42 @@ def test_gate_thresholds_use_cosine_relevance_independently_of_fused_rank() -> N
     gate = RecallSufficiencyGate()
     assert gate.assess(strong_rank_weak_cosine, "alpha beta", policy).reason == REASON_WEAK_TOP_ONE
     assert gate.assess(weak_rank_strong_cosine, "alpha beta", policy).reason == REASON_SUFFICIENT
-    assert gate.assess(flat_cosine, "alpha beta", policy).reason == REASON_WEAK_TOP_ONE
+    assert gate.assess(flat_cosine, "alpha beta", policy).reason == REASON_SUFFICIENT
+
+
+def test_lower_floor_candidates_cannot_manufacture_a_top_gap() -> None:
+    policy = RecallSufficiencyPolicy(min_top_score=0.35, min_top_gap=0.02)
+    baseline = (
+        _topic_candidate(1.0, text="alpha beta", relevance=0.4),
+        _topic_candidate(0.9, artifact_id="topic-2", text="alpha beta", relevance=0.39),
+    )
+    expanded = (*baseline, _topic_candidate(0.5, artifact_id="topic-3", text="alpha beta", relevance=0.15))
+    gate = RecallSufficiencyGate()
+    before = gate.assess(baseline, "alpha beta", policy)
+    after = gate.assess(expanded, "alpha beta", policy)
+    assert before.reason == after.reason == REASON_WEAK_TOP_ONE
+    assert after.signals.top_gap == pytest.approx(before.signals.top_gap)
+
+
+def test_one_scored_candidate_skips_gap_even_with_fts_competitors() -> None:
+    candidates = (
+        _topic_candidate(1.0, text="alpha beta", relevance=0.8),
+        _topic_candidate(0.9, artifact_id="topic-2", text="alpha beta"),
+    )
+    assessment = RecallSufficiencyGate().assess(candidates, "alpha beta", RecallSufficiencyPolicy())
+    assert assessment.reason == REASON_SUFFICIENT
+    assert assessment.signals.scored_families == 1
+    assert assessment.signals.gap_families == 0
+
+
+def test_fts_first_family_skips_score_threshold_despite_lower_vector_hit() -> None:
+    candidates = (
+        _topic_candidate(1.0, text="alpha beta"),
+        _topic_candidate(0.9, artifact_id="topic-2", text="alpha beta", relevance=0.31),
+    )
+    assessment = RecallSufficiencyGate().assess(candidates, "alpha beta", RecallSufficiencyPolicy())
+    assert assessment.reason == REASON_SUFFICIENT
+    assert assessment.signals.scored_families == 0
 
 
 def test_fts_only_candidates_skip_relevance_thresholds() -> None:

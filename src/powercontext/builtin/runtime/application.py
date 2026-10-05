@@ -242,6 +242,7 @@ from powercontext.builtin.runtime.recall_sufficiency import (
     MEMORY_FAMILY,
     REASON_AT_MAX_ROUNDS,
     REASON_EXPANSION_FAILED,
+    REASON_WEAK_TOP_ONE,
     TOPIC_MEMORY_FAMILY,
     RecallEffort,
     RecallExpander,
@@ -884,7 +885,7 @@ class ScopedContextApplication:
             else:
                 if measurement is not None:
                     await self._runtime.statistics.for_scope(self.scope_id).record_recall(measurement)
-        if effort is None:
+        if effort is None or not request.include_recall_gate:
             return build.context
         signals = effort.signals
         return build.context.model_copy(
@@ -916,7 +917,7 @@ class ScopedContextApplication:
         ``_prepare`` returns ``build.context`` and discards the rest, so a field there would
         have no production observer. The trace is returned alongside the build and delivered
         by ``_prepare`` to the Runtime's optional sink; its aggregate verdict is also projected
-        onto PreparedContext. ``effort`` is ``None`` whenever the policy is not configured.
+        onto PreparedContext when requested. ``effort`` is ``None`` whenever the policy is not configured.
         """
 
         builder = PreparedContextBuilder()
@@ -1116,7 +1117,7 @@ class ScopedContextApplication:
         added_embeddings = 0
         added_generation_calls = 0
         admission_by_family = list(round_zero.admissions)
-        initial_signals = None
+        last_signals = None
         try:
             budget = builder.probe_budget(
                 request=request,
@@ -1134,8 +1135,13 @@ class ScopedContextApplication:
                 budget=budget,
                 families_expected=families_expected,
             )
-            initial_signals = assessment.signals
-            while not assessment.sufficient and families_recoverable > 0 and len(expansions) < policy.max_rounds:
+            last_signals = assessment.signals
+            while (
+                not assessment.sufficient
+                and assessment.reason != REASON_WEAK_TOP_ONE
+                and families_recoverable > 0
+                and len(expansions) < policy.max_rounds
+            ):
                 plan = expander.plan(len(expansions) + 1, policy)
                 issued = await self._recall_round(
                     request,
@@ -1171,17 +1177,11 @@ class ScopedContextApplication:
                         continue
                     seen_topic.add(identity)
                     accumulated_topic.append(hit)
-                expansions.append(plan.action)
-                added_embeddings += issued.embedding_calls
-                added_generation_calls += issued.generation_calls
-                admission_by_family = list(issued.admissions)
-                families_recoverable = _families_with_recoverable_candidates(families, issued.admissions)
                 candidates = build_recall_candidates(
                     memory_hits=_flatten_scope_memory(memory_hits_by_scope, scope_ids),
                     topic_memory_hits=tuple(accumulated_topic),
                     experience_hits=_flatten_scope_experience(experience_hits_by_scope, scope_ids),
                 )
-                candidates_by_round.append(len(candidates))
                 budget = builder.probe_budget(
                     request=request,
                     current_scope_id=self.scope_id,
@@ -1219,7 +1219,19 @@ class ScopedContextApplication:
                     budget=budget,
                     families_expected=families_expected,
                 )
-            if not assessment.sufficient and families_recoverable > 0 and len(expansions) >= policy.max_rounds:
+                expansions.append(plan.action)
+                added_embeddings += issued.embedding_calls
+                added_generation_calls += issued.generation_calls
+                admission_by_family = list(issued.admissions)
+                families_recoverable = _families_with_recoverable_candidates(families, issued.admissions)
+                candidates_by_round.append(len(candidates))
+                last_signals = assessment.signals
+            if (
+                not assessment.sufficient
+                and assessment.reason != REASON_WEAK_TOP_ONE
+                and families_recoverable > 0
+                and len(expansions) >= policy.max_rounds
+            ):
                 assessment = replace(assessment, reason=REASON_AT_MAX_ROUNDS)
         except Exception as error:
             log_safely(
@@ -1245,7 +1257,7 @@ class ScopedContextApplication:
                     admission_by_family=admission_by_family,
                     added_embeddings=added_embeddings,
                     added_generation_calls=added_generation_calls,
-                    signals=initial_signals,
+                    signals=last_signals,
                 ),
             )
         capped_topic = tuple(accumulated_topic[: builder.topic_memory_candidate_limit])

@@ -4344,6 +4344,7 @@ def _add_route(
         methods=[operation.method],
         operation_id=operation.operation_id,
         response_model=operation.response_type,
+        response_model_exclude_unset=operation.operation_id == PREPARE_CONTEXT.operation_id,
         status_code=operation.success_status,
         responses=operation.responses,
         summary=operation.summary,

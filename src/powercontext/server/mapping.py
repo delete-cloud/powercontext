@@ -843,13 +843,15 @@ def topic_memory_response(value: PublishedTopicMemory) -> TopicMemoryArtifact:
 
 
 def prepared_context_response(value: PreparedContext) -> TransportPreparedContext:
-    return TransportPreparedContext.model_validate({
+    payload: dict[str, Any] = {
         "schema": PreparedContextSchema(value.schema_version),
         "status": PreparedContextStatus(value.status),
         "content": value.content,
         "content_bytes": value.content_bytes,
-        "recall_gate": None if value.recall_gate is None else value.recall_gate.model_dump(mode="json"),
-    })
+    }
+    if value.recall_gate is not None:
+        payload["recall_gate"] = value.recall_gate.model_dump(mode="json")
+    return TransportPreparedContext.model_validate(payload)
 
 
 def entries_response(value: MemoryEntriesPage) -> ListMemoryEntriesResponse:

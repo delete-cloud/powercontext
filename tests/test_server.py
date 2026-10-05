@@ -16,6 +16,7 @@ import asyncio
 import logging
 import os
 import re
+import runpy
 import shlex
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1081,6 +1082,40 @@ def test_prepare_context_rejects_memory_specific_tuning_fields(tmp_path) -> None
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "invalid_request"
+
+
+def test_prepare_context_gate_opt_in_preserves_legacy_http_shape(tmp_path) -> None:
+    validator_path = (
+        Path(__file__).resolve().parents[1] / "integrations/codex/plugins/powercontext/hooks/prepared_context.py"
+    )
+    validate_prepared_context = runpy.run_path(str(validator_path))["validate_prepared_context"]
+    legacy_fields = {"schema", "status", "content", "content_bytes"}
+
+    for enabled in (False, True):
+        app = create_server_app(
+            settings=ServerSettings(
+                database=SQLiteConfig(url=f"sqlite+aiosqlite:///{tmp_path / f'gate-{enabled}.db'}"),
+                runtime=RuntimeConfig(recall_gate_enabled=enabled),
+                mcp=McpConfig(enabled=False),
+            )
+        )
+        with TestClient(app) as client:
+            scope_id = client.get("/v1/scopes/default").json()["scope_id"]
+            request = {"scope_id": scope_id, "query": "alpha beta"}
+            legacy_response = client.post("/v1/context/prepare", json=request)
+            assert legacy_response.status_code == 200
+            legacy_body = legacy_response.json()
+            assert set(legacy_body) == legacy_fields
+            assert validate_prepared_context(legacy_body) == legacy_body
+
+            opted_response = client.post("/v1/context/prepare", json={**request, "include_recall_gate": True})
+            assert opted_response.status_code == 200
+            opted_body = opted_response.json()
+            if enabled:
+                assert set(opted_body) == legacy_fields | {"recall_gate"}
+                assert opted_body["recall_gate"]["reason"] == "no-content"
+            else:
+                assert set(opted_body) == legacy_fields
 
 
 def test_prepare_context_rejects_unicode_surrogates_without_crashing(tmp_path) -> None:

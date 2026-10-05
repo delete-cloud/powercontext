@@ -17,14 +17,16 @@
 本 RFC 让 Runtime 在渲染之前，用低成本方式判断候选集对当前 query 是否**充分**；不充分时，最多执行两轮受控扩展。
 两轮都降低施加于各类别搜索**已经取回**的候选上的**准入下限**，然后在**同一个**调用方给定的预算内完成选择。
 
-闸门不调用模型，不改变调用方预算，不改变公开 `PreparedContext` 契约，并在任何异常时退化为当前行为。
+闸门不调用模型，不改变调用方预算，并在任何异常时退化为当前行为。仅当调用方显式设置
+`include_recall_gate: true` 且本次完成评估时，才返回聚合的 `recall_gate`；普通请求仍收到原有四字段
+`PreparedContext` 响应。
 
 有三条性质使该提案可以被安全评估：
 
 - **扩展不可能破坏 Builder 不变量。** 跨轮合并后的候选会沿用它已经用于截断第 0 轮的那两个分配器，重新选择到各类别
   既有的候选上限之内，因此跨轮并集永远不会超过 `build_scopes_result()` 所强制的那道上限
   （`prepared_context.py:164-169`）。
-- **不扩展的运行与今天逐字节相同。** 无扩展路径完全未变，这就是回归保证。
+- **不扩展的运行保持准备内容逐字节相同。** 未选择响应 opt-in 时，HTTP 正文也保持原有四字段形状。
 - **交付体积永不越过 `max_bytes`。** 扩展可以使用第 0 轮候选集未用满的预算，因此 `content_bytes` 可以在这个上限
   之内**变大**，但永远不能越过它。
 
@@ -109,14 +111,14 @@ Stage C  报告召回代价与省略情况                  （进程内）
 | --- | --- | --- |
 | 各类别、各通道的取回数与准入数 | 新增的准入计数器 | 某个类别的准入下限把取回的内容几乎全部丢弃了。 |
 | 准入候选数与该类别 Builder 上限之比 | 第 0 轮命中与 `prepared_context.py:103-105` | 该类别还有空间让后续轮次贡献；已饱和的类别没有。 |
-| Top-1 分数及其与准入候选均分的差距 | 仅限带分数的类别：Memory（`MemoryHit.score`）与 Topic Memory（`TopicMemorySearchHit.score`） | 一条看似可用的命中被噪声包围，或根本没有明显胜出者。 |
+| 顶部向量 cosine 相关度及类别内差距 | Memory（`MemoryHit.relevance`）与 Topic Memory（`TopicMemorySearchHit.relevance`），由单位向量 L2 距离换算；融合 `score` 仍是名次值 | 融合第一条是否有可用语义证据。差距只计算达到第 0 轮语义准入下限的候选，且只在顶部相关度低于 0.70 强匹配阈值时参与判断。 |
 | 头部候选在 analyzer 词元空间中的词项覆盖度 | `analyze_text` / `fts_query_requirements`（`search.py:78`） | 命中只是靠停用词或某一个共现 token 匹配上的。 |
 | 至少返回一条准入候选的参与类别数量 | 第 0 轮结果 | 选了三个类别，只有一个有结果。 |
 | 类别内的不同证据身份数 | 类别专属身份（见下表） | 多条候选其实是同一份证据。 |
 | 第 0 轮的拟合是否被预算卡住 | 预算探测结果 | 偏薄输出是由 `max_bytes` 造成的，而不是召回。 |
 
-**Experience 没有分数。** `ExperienceSearchHit` 只有 `artifact_ref` 与 `content`
-（`artifacts/experience/search.py:26-30`），因此基于分数的信号只对带分数的类别适用。Experience 只贡献它的准入计数、
+**Experience 没有向量相关度。** `ExperienceSearchHit` 只有 `artifact_ref` 与 `content`
+（`artifacts/experience/search.py:26-30`），因此相关度阈值跳过 Experience 以及融合第一条只有 FTS 证据的类别。Experience 只贡献它的准入计数、
 它相对自身上限的候选数，以及它的"有结果"位。
 
 **证据身份是类别专属的。** 一次 Memory 搜索返回的多个 `MemoryHit` 共享同一个 `memory_ref` Artifact revision，因为一个
@@ -165,7 +167,9 @@ Memory Revision 装有多个条目；真正独立的证据单位是条目，由 
 
 ## 可以观测到什么
 
-沿用 RFC 0080 `rerank` trace 的先例，闸门结果留在进程内，**不**进入 HTTP v1 响应。
+完整的 `RecallEffort` trace 留在进程内。调用方显式设置 `include_recall_gate: true` 且闸门运行时，
+`PreparedContext.recall_gate` 返回最终原因码、已提交轮次、候选数、顶部向量相关度（可为 null）和词项覆盖度
+（可为 null），不包含 query 文本或证据身份。
 
 `RecallEffort` 由扩展循环产出，而循环位于 `ScopedContextApplication._prepare`（`application.py:727`），不在 Builder 内。
 因此它**不**挂在 `PreparedContextBuild` 上：`_prepare` 返回的是 `build.context`（`application.py:812`），构建结果的其余
@@ -236,7 +240,7 @@ Content-Type: application/json
 }
 ```
 
-第 0 轮从 64 条后端候选池中返回三条 Memory 候选，其中一条分数可用；准入从 64 条里只放进三条，远低于 Memory 的
+第 0 轮从 64 条后端候选池中返回三条 Memory 候选，其中一条有可用向量相关度；准入从 64 条里只放进三条，远低于 Memory 的
 上限 16，因此该类别还有增长空间。预算探测发现仍有未用字节、且没有整条丢弃，所以这是**召回**偏薄而不是**预算**偏薄。
 闸门判定为 `weak-top-1`，扩展一次（降低准入下限），第 1 轮又放进四条候选——它们本就在第 0 轮搜索已取回的候选池里，
 只是被当时的下限丢弃了。随后选择与渲染完全按现有逻辑进行，仍在同样的 8000 字节内。
@@ -252,10 +256,10 @@ Content-Type: application/json
 | 用无模型信号判断充分性 | 在组装阶段引入模型调用（RFC 1489 要求组装无模型调用） |
 | 最多扩展两轮，累计代价有界 | 无限重试或循环 |
 | 在既有候选上限内加大搜索力度 | 突破 `memory_candidate_limit` / `experience_candidate_limit` |
-| 保持调用方 `max_bytes` 为唯一输出预算 | 改动 `PreparedContext(schema, status, content, content_bytes)` |
+| 保持调用方 `max_bytes` 为唯一输出预算 | 改动未 opt-in 调用方收到的四字段响应 |
 | 把合并后的集合重新选择到各类别上限内 | 让跨轮并集破坏 Builder 不变量 |
 | 在 `max_bytes` 之内使用未用预算接纳可用证据 | 交付超过 `max_bytes` 的内容 |
-| 通过进程内 sink 报告代价 | 改动 HTTP v1 响应 |
+| 通过进程内 sink 报告完整代价，并向 opt-in 调用方返回聚合结论 | 在 HTTP 响应中放入 query 文本或证据身份 |
 | 任何错误都退化为当前行为 | 让扩展成为新的失败模式 |
 
 # Reference-level explanation
@@ -338,10 +342,10 @@ Builder 的上限本身（`application.py:742-743`、`:761`），与上文一致
 `admission: RecallAdmissionPolicy | None = None`，用于替换推导出的词项匹配数与 `0.3` 余弦基线，并报出
 `retrieved = len(channels.fts) + len(channels.vector)` 与
 `admitted = len(admitted_fts) + len(admitted_vector)`。计数通过 `MemorySearchResult`（`memory/models.py:165-169`）上的
-仅进程内字段暴露。HTTP 契约不受影响，因为响应是由 `search_response`（`server/mapping.py:788`）从
+仅进程内字段暴露。Memory 搜索响应不受影响，因为它由 `search_response`（`server/mapping.py:788`）从
 `MemorySearchPage`（`runtime/models.py:183-189`，构造于 `application.py:1738` 与 `:1761`）构建的，而它显式枚举自己的
-字段；这些计数器必须留在 `MemorySearchPage` 之外、也不进入 `openapi/powercontext.yaml`，因此不需要执行
-`make api-generate`。
+字段；这些计数器必须留在 `MemorySearchPage` 之外、也不进入 `openapi/powercontext.yaml`。另外，
+`PreparedContext` 的 opt-in 响应变更需要执行 `make api-generate`。
 
 **Experience。** Runtime 通过 `experience_recall` 回调召回 Experience（`application.py:862-878`），它当前返回裸的
 `tuple[ExperienceSearchHit, ...]`。它需要改为返回一个同时携带命中与其 `AdmissionCounts` 的结果值。下限应用在行解码器
@@ -409,7 +413,7 @@ RFC。
 
 `truncated_items` 与 `dropped_items` 是单次调用内的聚合计数——绝不是逐条归因，也绝不是对某个条目的评价。这一区分是
 刻意的，因为 #1554 已经裁定：条目输给 byte budget **不**构成关于该条目的负向结果。本 RFC 统计省略情况，只是为了解释
-自己的扩展，不记录任何 `candidate_not_selected` 式信号，也不向 HTTP 契约增加任何字段。
+自己的扩展，不记录任何 `candidate_not_selected` 式信号，也不向 HTTP 契约增加逐条字段。
 
 有一点纠正值得记录，因为它关系到未来那个 RFC 该如何论证：`RelationalRecallTokenEstimator` 在 prepare 内解析召回
 血缘（`recall.py:106`）**并不能**作为允许写入的先例。`resolve()` 与 `estimate()` 都是读操作，而 RFC 0028 约束的是
@@ -499,9 +503,10 @@ Experience 与 Topic Memory 的搜索不做 rerank。因此上表的生成调用
 
 ## 兼容性与 API 影响
 
-`PreparedContext` 保持四个字段，`openapi/powercontext.yaml` 不变，因此不需要执行 `make api-generate`：准入计数器挂在
-`MemorySearchResult` 的进程内取值上，永远不会到达由 `search_response`（`server/mapping.py:788`）构建的 HTTP 投影。
-`PreparedContextBuild` 不变。改动都是内部、进程内的：
+`openapi/powercontext.yaml` 定义可选请求字段 `include_recall_gate` 和响应字段 `recall_gate`，并通过
+`make api-generate` 更新 HTTP 模型。请求字段默认 false；缺省或本次闸门未运行时，HTTP 响应完全省略
+`recall_gate`，以兼容严格校验四字段的旧 SDK 与宿主。完整 trace 和准入计数仍留在进程内；
+`PreparedContextBuild` 不携带 trace。内部改动包括：
 
 - Memory 搜索入口新增可选的 `admission` 参数与进程内计数器；
 - `experience_recall` 与 Topic Memory 召回回调由裸元组改为返回携带计数的结果值，其签名是 Runtime 的构造参数
@@ -512,7 +517,7 @@ Experience 与 Topic Memory 的搜索不做 rerank。因此上表的生成调用
 
 ## 测试
 
-闸门、扩展器与预算探测作为纯函数测试，覆盖：无分数类别（Experience）的信号计算、准入数为零的类别，以及已经处于上限的
+闸门、扩展器与预算探测作为纯函数测试，覆盖：无向量相关度类别（Experience）的信号计算、准入数为零的类别，以及已经处于上限的
 类别。
 
 Runtime 层测试在固定候选集与固定预算下断言：
@@ -581,8 +586,8 @@ OceanBase 上各跑一遍，报告任务成功率、注入字节数、`truncated
 
 # Prior art
 
-- **RFC 0080 的 rerank trace** 是直接先例：把诊断细节挂在进程内结果上，同时不改动 HTTP 响应。本 RFC 沿用同一
-  规则，并沿用了召回 token 估算器已经在用的进程内回调模式（`application.py:794-808`）。
+- **RFC 0080 的 rerank trace** 是完整诊断细节留在进程内的先例。本 RFC 沿用召回 token 估算器的进程内
+  回调模式（`application.py:794-808`），仅把不含证据身份的聚合结论交给显式 opt-in 的 HTTP 调用方。
 - **OpenClaw 生态中的宿主侧上下文插件**实现了完备性闸门，输出 `use` / `expand` / `max_expand`，并配以自适应扩展
   循环：放大 top-K（×2 后 ×3）、放宽时间窗，上限两轮。这个**形状**值得借鉴，实现不值得照抄——它们的闸门与压缩
   是正则与关键词打分，没有真正的语义；跨项目契约是 duck-typed，没有 schema；度量模块被明确声明与它本应影响的

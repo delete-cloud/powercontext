@@ -866,7 +866,11 @@ class RecallGateResult(BaseModel):
     candidate_count: Annotated[StrictInt, Field(ge=0)]
     top_relevance: Annotated[
         StrictFloat | None,
-        Field(description="Best admitted vector cosine similarity, or null if none was available.", ge=-1.0, le=1.0),
+        Field(
+            description="Best cosine similarity among families whose first fused hit has vector evidence, or null if none qualified.",
+            ge=-1.0,
+            le=1.0,
+        ),
     ]
     lexical_overlap: Annotated[
         StrictFloat | None,
@@ -3980,6 +3984,12 @@ class PrepareContextRequest(BaseModel):
     include_code: Annotated[
         StrictBool,
         Field(description="Opt into current-Scope native code evidence. No index is built during preparation."),
+    ] = False
+    include_recall_gate: Annotated[
+        StrictBool,
+        Field(
+            description="Opt into the aggregate recall gate verdict when the gate runs. Omit to retain the four-field PreparedContext response for existing clients."
+        ),
     ] = False
     assembly: ContextAssembly | None = None
 

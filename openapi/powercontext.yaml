@@ -7092,7 +7092,7 @@ components:
           minimum: -1
           maximum: 1
           nullable: true
-          description: Best admitted vector cosine similarity, or null if none was available.
+          description: Best cosine similarity among families whose first fused hit has vector evidence, or null if none qualified.
         lexical_overlap:
           type: number
           minimum: 0
@@ -9019,6 +9019,10 @@ components:
           type: boolean
           default: false
           description: Opt into current-Scope native code evidence. No index is built during preparation.
+        include_recall_gate:
+          type: boolean
+          default: false
+          description: Opt into the aggregate recall gate verdict when the gate runs. Omit to retain the four-field PreparedContext response for existing clients.
         assembly:
           $ref: "#/components/schemas/ContextAssembly"
     ContextAssemblySection:
