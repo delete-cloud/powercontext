@@ -104,7 +104,8 @@ class PreparedContextBuild:
     ``omissions`` is always filled by the Builder. The RFC 1560 recall trace is deliberately
     **not** a field here: ``ScopedContextApplication._prepare`` returns ``build.context`` and
     discards the rest, so such a field would have no production observer. The trace is
-    delivered through the Runtime's optional ``RecallEffortSink`` instead.
+    delivered through the Runtime's optional ``RecallEffortSink``; a small aggregate verdict
+    is projected onto the returned context.
     """
 
     context: PreparedContext

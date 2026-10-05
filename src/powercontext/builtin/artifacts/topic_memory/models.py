@@ -183,6 +183,7 @@ class TopicMemorySearchHit(BaseModel):
     snippet: str | None = None
     score: float = Field(gt=0.0, allow_inf_nan=False)
     matched_by: tuple[TopicMemoryMatchedBy, ...]
+    relevance: float | None = Field(default=None, ge=-1.0, le=1.0, allow_inf_nan=False)
 
 
 @dataclass(frozen=True)

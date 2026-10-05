@@ -848,6 +848,7 @@ def prepared_context_response(value: PreparedContext) -> TransportPreparedContex
         "status": PreparedContextStatus(value.status),
         "content": value.content,
         "content_bytes": value.content_bytes,
+        "recall_gate": None if value.recall_gate is None else value.recall_gate.model_dump(mode="json"),
     })
 
 

@@ -250,6 +250,16 @@ class PrepareContextRequest(_PreparedContextModel):
         return value
 
 
+class RecallGateResult(_PreparedContextModel):
+    """Aggregate final gate verdict for one preparation, without retrieved evidence."""
+
+    reason: str = Field(min_length=1)
+    rounds: Annotated[int, Field(ge=1)]
+    candidate_count: Annotated[int, Field(ge=0)]
+    top_relevance: Annotated[float, Field(ge=-1.0, le=1.0, allow_inf_nan=False)] | None = None
+    lexical_overlap: Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)] | None = None
+
+
 class PreparedContext(_PreparedContextModel):
     """Ephemeral context ready for direct injection into one Agent turn."""
 
@@ -257,6 +267,7 @@ class PreparedContext(_PreparedContextModel):
     status: PreparedContextStatus
     content: str | None
     content_bytes: Annotated[int, Field(ge=0)]
+    recall_gate: RecallGateResult | None = None
 
     @model_validator(mode="after")
     def validate_content(self) -> PreparedContext:

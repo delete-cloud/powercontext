@@ -99,6 +99,7 @@ def _topic_candidate(
     artifact_id: str = "topic",
     revision: int = 1,
     text: str = "zzz",
+    relevance: float | None = None,
 ) -> RecallCandidate:
     return RecallCandidate(
         family="topic-memory",
@@ -108,6 +109,7 @@ def _topic_candidate(
         entry_version_id=None,
         score=score,
         text=text,
+        relevance=relevance,
     )
 
 
@@ -142,6 +144,7 @@ def _topic_hit(
     title: str = "Title",
     summary: str = "Summary",
     snippet: str | None = None,
+    relevance: float | None = None,
 ) -> TopicMemorySearchHit:
     return TopicMemorySearchHit(
         artifact_ref=ArtifactRef(family="topic-memory", artifact_id=artifact_id, revision=revision),
@@ -150,6 +153,7 @@ def _topic_hit(
         snippet=snippet,
         score=score,
         matched_by=("topic_fts",),
+        relevance=relevance,
     )
 
 
@@ -286,7 +290,10 @@ def test_gate_reports_thin_families_when_a_selected_family_returned_nothing() ->
 
 def test_gate_reports_weak_top_one_for_a_weak_scoring_family() -> None:
     policy = RecallSufficiencyPolicy(min_top_score=0.35)
-    candidates = (_topic_candidate(0.2), _topic_candidate(0.1, artifact_id="topic-2"))
+    candidates = (
+        _topic_candidate(1.0, relevance=0.2),
+        _topic_candidate(0.9, artifact_id="topic-2", relevance=0.1),
+    )
     assessment = RecallSufficiencyGate().assess(
         candidates,
         "alpha beta gamma delta",
@@ -301,7 +308,10 @@ def test_gate_reports_weak_top_one_for_a_weak_scoring_family() -> None:
 
 def test_gate_reports_weak_lexical_when_the_best_candidate_misses_query_terms() -> None:
     policy = RecallSufficiencyPolicy(min_top_score=0.35, min_top_gap=0.02, min_lexical_overlap=0.5)
-    candidates = (_topic_candidate(1.0), _topic_candidate(0.5, artifact_id="topic-2"))
+    candidates = (
+        _topic_candidate(1.0, relevance=0.8),
+        _topic_candidate(0.5, artifact_id="topic-2", relevance=0.5),
+    )
     assessment = RecallSufficiencyGate().assess(
         candidates,
         "alpha beta gamma delta",
@@ -317,7 +327,10 @@ def test_gate_reports_weak_lexical_when_the_best_candidate_misses_query_terms() 
 def test_gate_reports_sufficient_when_every_signal_passes() -> None:
     policy = RecallSufficiencyPolicy()
     text = "alpha beta gamma delta"
-    candidates = (_topic_candidate(1.0, text=text), _topic_candidate(0.5, artifact_id="topic-2", text=text))
+    candidates = (
+        _topic_candidate(1.0, text=text, relevance=0.8),
+        _topic_candidate(0.5, artifact_id="topic-2", text=text, relevance=0.5),
+    )
     assessment = RecallSufficiencyGate().assess(
         candidates,
         text,
@@ -439,10 +452,10 @@ def test_experience_only_candidates_never_expose_a_fabricated_score() -> None:
     assert assessment.reason != REASON_WEAK_TOP_ONE
 
 
-def test_topic_candidates_use_their_normalized_relevance_as_top_score() -> None:
+def test_topic_candidates_use_vector_relevance_as_top_score() -> None:
     candidates = build_recall_candidates(
         memory_hits=(),
-        topic_memory_hits=(_topic_hit(score=42.0),),
+        topic_memory_hits=(_topic_hit(score=42.0, relevance=0.78),),
         experience_hits=(),
     )
     signals = (
@@ -457,7 +470,40 @@ def test_topic_candidates_use_their_normalized_relevance_as_top_score() -> None:
         .signals
     )
     assert signals.scored_families == 1
-    assert signals.top_score == pytest.approx(0.42)
+    assert candidates[0].score == pytest.approx(0.42)
+    assert signals.top_score == pytest.approx(0.78)
+
+
+def test_gate_thresholds_use_cosine_relevance_independently_of_fused_rank() -> None:
+    policy = RecallSufficiencyPolicy(min_candidates=2, min_top_score=0.35, min_top_gap=0.02)
+    strong_rank_weak_cosine = (
+        _topic_candidate(1.0, text="alpha beta", relevance=0.3),
+        _topic_candidate(0.5, artifact_id="topic-2", text="alpha beta", relevance=0.1),
+    )
+    weak_rank_strong_cosine = (
+        _topic_candidate(0.01, text="alpha beta", relevance=0.8),
+        _topic_candidate(0.005, artifact_id="topic-2", text="alpha beta", relevance=0.5),
+    )
+    flat_cosine = (
+        _topic_candidate(1.0, text="alpha beta", relevance=0.8),
+        _topic_candidate(0.5, artifact_id="topic-2", text="alpha beta", relevance=0.8),
+    )
+    gate = RecallSufficiencyGate()
+    assert gate.assess(strong_rank_weak_cosine, "alpha beta", policy).reason == REASON_WEAK_TOP_ONE
+    assert gate.assess(weak_rank_strong_cosine, "alpha beta", policy).reason == REASON_SUFFICIENT
+    assert gate.assess(flat_cosine, "alpha beta", policy).reason == REASON_WEAK_TOP_ONE
+
+
+def test_fts_only_candidates_skip_relevance_thresholds() -> None:
+    candidates = build_recall_candidates(
+        memory_hits=(_memory_hit(score=1 / 61, matched_by=("fts",)),),
+        topic_memory_hits=(_topic_hit(score=100.0, artifact_id="topic-2", title="alpha", summary="beta"),),
+        experience_hits=(),
+    )
+    assessment = RecallSufficiencyGate().assess(candidates, "alpha beta", RecallSufficiencyPolicy())
+    assert assessment.reason == REASON_SUFFICIENT
+    assert assessment.signals.scored_families == 0
+    assert assessment.signals.gap_families == 0
 
 
 def test_memory_single_channel_top_rank_normalizes_to_one() -> None:
@@ -476,6 +522,22 @@ def test_memory_two_channel_hit_normalizes_against_its_wider_upper_bound() -> No
         experience_hits=(),
     )
     assert candidates[0].score == pytest.approx(0.5)
+
+
+def test_memory_vector_relevance_reaches_gate_without_changing_rank_score() -> None:
+    hits = (
+        _memory_hit(score=2 / 61, matched_by=("fts", "vector"), text="alpha beta").model_copy(
+            update={"relevance": 0.3}
+        ),
+        _memory_hit(score=1 / 62, matched_by=("vector",), text="alpha beta").model_copy(
+            update={"entry_id": "other", "relevance": 0.1}
+        ),
+    )
+    candidates = build_recall_candidates(memory_hits=hits, topic_memory_hits=(), experience_hits=())
+    assessment = RecallSufficiencyGate().assess(candidates, "alpha beta", RecallSufficiencyPolicy())
+    assert candidates[0].score == pytest.approx(1.0)
+    assert assessment.signals.top_score == pytest.approx(0.3)
+    assert assessment.reason == REASON_WEAK_TOP_ONE
 
 
 # ── lexical_overlap semantics ───────────────────────────────────────────────────────────────

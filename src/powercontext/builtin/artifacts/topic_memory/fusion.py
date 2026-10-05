@@ -83,6 +83,7 @@ def _fuse_topic_memory_rankings(
     snippets: dict[tuple[str, int], str] = {}
     scores: dict[tuple[str, int], float] = {}
     matched: dict[tuple[str, int], set[TopicMemoryMatchedBy]] = {}
+    relevance: dict[tuple[str, int], float] = {}
     rankings: tuple[tuple[TopicMemoryMatchedBy, tuple[TopicMemoryChannelHit, ...]], ...] = (
         ("topic_fts", _admit_fts(query, channels.topic_fts, admission)),
         ("topic_vector", _admit_vector(channels.topic_vector, admission)),
@@ -120,6 +121,9 @@ def _fuse_topic_memory_rankings(
                 snippets.setdefault(identity, _snippet(query, candidate.chunk_text, lexical=channel == "detail_fts"))
             scores[identity] = scores.get(identity, 0.0) + 1.0 / (_RRF_CONSTANT + rank)
             matched.setdefault(identity, set()).add(channel)
+            if channel in ("topic_vector", "detail_vector") and candidate.distance is not None:
+                similarity = max(-1.0, min(1.0, 1.0 - candidate.distance**2 / 2.0))
+                relevance[identity] = max(relevance.get(identity, -1.0), similarity)
 
     ordered = sorted(
         candidates,
@@ -134,6 +138,7 @@ def _fuse_topic_memory_rankings(
                 snippet=snippets.get(identity),
                 score=min(100.0, scores[identity] / max_score * 100.0),
                 matched_by=tuple(channel for channel in _CHANNEL_ORDER if channel in matched[identity]),
+                relevance=relevance.get(identity),
             )
             for identity in ordered
         ),

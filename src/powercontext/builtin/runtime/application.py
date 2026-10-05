@@ -198,6 +198,7 @@ from powercontext.builtin.runtime.models import (
     PreparedContext,
     ProposeExperienceRequest,
     ProposeSkillRequest,
+    RecallGateResult,
     RejectArtifactCandidateRequest,
     RememberMemoryRequest,
     ResolveExternalSkillRequest,
@@ -883,7 +884,20 @@ class ScopedContextApplication:
             else:
                 if measurement is not None:
                     await self._runtime.statistics.for_scope(self.scope_id).record_recall(measurement)
-        return build.context
+        if effort is None:
+            return build.context
+        signals = effort.signals
+        return build.context.model_copy(
+            update={
+                "recall_gate": RecallGateResult(
+                    reason=effort.assessment,
+                    rounds=effort.rounds,
+                    candidate_count=effort.candidates_by_round[0] if signals is None else signals.candidate_count,
+                    top_relevance=None if signals is None or signals.scored_families == 0 else signals.top_score,
+                    lexical_overlap=None if signals is None else signals.lexical_overlap,
+                )
+            }
+        )
 
     async def _prepare_build(
         self,
@@ -901,8 +915,8 @@ class ScopedContextApplication:
         Returns ``(build, effort)``. The RFC 1560 trace is **not** a field of the build:
         ``_prepare`` returns ``build.context`` and discards the rest, so a field there would
         have no production observer. The trace is returned alongside the build and delivered
-        by ``_prepare`` to the Runtime's optional sink. ``effort`` is ``None`` whenever the
-        policy is not configured, so the default-off path allocates nothing.
+        by ``_prepare`` to the Runtime's optional sink; its aggregate verdict is also projected
+        onto PreparedContext. ``effort`` is ``None`` whenever the policy is not configured.
         """
 
         builder = PreparedContextBuilder()
@@ -1102,6 +1116,7 @@ class ScopedContextApplication:
         added_embeddings = 0
         added_generation_calls = 0
         admission_by_family = list(round_zero.admissions)
+        initial_signals = None
         try:
             budget = builder.probe_budget(
                 request=request,
@@ -1119,6 +1134,7 @@ class ScopedContextApplication:
                 budget=budget,
                 families_expected=families_expected,
             )
+            initial_signals = assessment.signals
             while not assessment.sufficient and families_recoverable > 0 and len(expansions) < policy.max_rounds:
                 plan = expander.plan(len(expansions) + 1, policy)
                 issued = await self._recall_round(
@@ -1229,6 +1245,7 @@ class ScopedContextApplication:
                     admission_by_family=admission_by_family,
                     added_embeddings=added_embeddings,
                     added_generation_calls=added_generation_calls,
+                    signals=initial_signals,
                 ),
             )
         capped_topic = tuple(accumulated_topic[: builder.topic_memory_candidate_limit])
@@ -1265,6 +1282,7 @@ class ScopedContextApplication:
                 admission_by_family=admission_by_family,
                 added_embeddings=added_embeddings,
                 added_generation_calls=added_generation_calls,
+                signals=assessment.signals,
             ),
         )
 

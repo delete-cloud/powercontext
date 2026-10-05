@@ -77,10 +77,9 @@ _TOPIC_SCORE_SCALE = 100.0
 class RecallCandidate:
     """One family-local retrieval result, projected for model-free assessment.
 
-    ``score`` is a family-local relevance normalized into ``[0.0, 1.0]`` for the families that
-    expose a real score. Families that expose only presence/counts (Experience) carry ``0.0``
-    and never take part in the score signals — inventing a confidence for them would make the
-    gate less honest, not more.
+    ``score`` retains the family-local fused ranking value. ``relevance`` is the cosine
+    similarity of the best admitted vector channel, when one exists. Only relevance enters
+    the gate's score thresholds.
     """
 
     family: str
@@ -90,19 +89,16 @@ class RecallCandidate:
     entry_version_id: str | None
     score: float
     text: str
+    relevance: float | None = None
 
 
 @dataclass(frozen=True)
 class RecallSignals:
     """Cheap, model-free signals derived from the accumulated candidate set.
 
-    Score caveat (a known limitation, not a polished story): Memory's fused score is a
-    reciprocal-rank score, so its discrimination is compressed by rank. The normalized Memory
-    score saturates near ``1.0`` for a single strong channel hit, which is why the real
-    load-bearing signals in v1 are ``candidate_count``, family coverage and ``lexical_overlap``;
-    the score signal is driven mainly by Topic Memory. ``lexical_overlap`` is the query-term
-    recall of the single best candidate (its overlap is the maximum over candidates), not the
-    share of candidates sharing at least one term.
+    ``top_score``, ``mean_score`` and ``top_gap`` measure vector cosine relevance, regardless
+    of the families' different fused-score scales. ``lexical_overlap`` is the query-term
+    recall of the single best candidate (its overlap is the maximum over candidates).
 
     ``distinct_source_count`` counts family-specific evidence identities via
     :func:`candidate_identity` — a Memory entry (``memory_ref`` + ``entry_id`` +
@@ -123,6 +119,7 @@ class RecallSignals:
     lexical_overlap: float
     families_expected: int = 0
     scored_families: int = 0
+    gap_families: int = 0
 
 
 @dataclass(frozen=True)
@@ -259,9 +256,10 @@ class RecallBudgetView:
 
 @dataclass(frozen=True)
 class RecallEffort:
-    """In-process trace of the recall loop; never persisted and never added to the HTTP body.
+    """In-process trace of the recall loop; never persisted.
 
-    The trace is delivered to the Runtime's optional ``RecallEffortSink`` and to nothing else.
+    The trace is delivered to the Runtime's optional ``RecallEffortSink``. A small aggregate
+    assessment is also projected onto PreparedContext.
     It is **not** attached to ``PreparedContextBuild``: ``_prepare`` returns ``build.context``
     and discards the rest of the build result, so a field there would have no production
     observer.
@@ -304,6 +302,7 @@ class RecallEffort:
     dropped_items: int = 0
     dropped_below_min_bytes: int = 0
     dropped_no_fitting_truncation: int = 0
+    signals: RecallSignals | None = None
 
 
 def recall_effort(
@@ -316,6 +315,7 @@ def recall_effort(
     added_embeddings: int = 0,
     added_generation_calls: int = 0,
     omissions: PreparedContextOmissions | None = None,
+    signals: RecallSignals | None = None,
 ) -> RecallEffort:
     """Assemble one :class:`RecallEffort`, folding a build's omission counts into it.
 
@@ -339,6 +339,7 @@ def recall_effort(
         dropped_items=0 if omissions is None else omissions.dropped_items,
         dropped_below_min_bytes=0 if omissions is None else omissions.dropped_below_min_bytes,
         dropped_no_fitting_truncation=0 if omissions is None else omissions.dropped_no_fitting_truncation,
+        signals=signals,
     )
 
 
@@ -373,6 +374,7 @@ def build_recall_candidates(
                 entry_version_id=hit.entry_version_id,
                 score=_normalize_memory_score(hit),
                 text=hit.text,
+                relevance=hit.relevance,
             )
         )
     for topic_hit in topic_memory_hits:
@@ -385,6 +387,7 @@ def build_recall_candidates(
                 entry_version_id=None,
                 score=_normalize_topic_score(topic_hit),
                 text="\n".join(part for part in (topic_hit.title, topic_hit.summary, topic_hit.snippet) if part),
+                relevance=topic_hit.relevance,
             )
         )
     for experience_hit in experience_hits:
@@ -450,8 +453,8 @@ class RecallSufficiencyGate:
             return GateAssessment(sufficient=False, reason=REASON_THIN_CANDIDATES, signals=signals)
         if families_expected > 1 and signals.family_count < families_expected:
             return GateAssessment(sufficient=False, reason=REASON_THIN_FAMILIES, signals=signals)
-        if signals.scored_families > 0 and (
-            signals.top_score < policy.min_top_score or signals.top_gap < policy.min_top_gap
+        if (signals.scored_families > 0 and signals.top_score < policy.min_top_score) or (
+            signals.gap_families > 0 and signals.top_gap < policy.min_top_gap
         ):
             return GateAssessment(sufficient=False, reason=REASON_WEAK_TOP_ONE, signals=signals)
         if signals.lexical_overlap < policy.min_lexical_overlap:
@@ -481,7 +484,7 @@ def _build_signals(
     families_with_candidates = len({candidate.family for candidate in candidates})
     distinct_source_count = len({candidate_identity(candidate) for candidate in candidates})
     lexical_overlap = _lexical_overlap(candidates, query)
-    top_score, mean_score, top_gap, scored_families = _score_signals(candidates)
+    top_score, mean_score, top_gap, scored_families, gap_families = _score_signals(candidates)
     return RecallSignals(
         candidate_count=candidate_count,
         family_count=families_with_candidates,
@@ -492,6 +495,7 @@ def _build_signals(
         lexical_overlap=lexical_overlap,
         families_expected=families_expected,
         scored_families=scored_families,
+        gap_families=gap_families,
     )
 
 
@@ -514,10 +518,10 @@ def _lexical_overlap(candidates: Sequence[RecallCandidate], query: str) -> float
     return best
 
 
-def _score_signals(candidates: Sequence[RecallCandidate]) -> tuple[float, float, float, int]:
-    """Aggregate score signals over the families that expose a real relevance score.
+def _score_signals(candidates: Sequence[RecallCandidate]) -> tuple[float, float, float, int, int]:
+    """Aggregate cosine relevance over families with admitted vector hits.
 
-    Returns ``(top_score, mean_score, top_gap, scored_families)``. ``top_score`` is the maximum
+    Returns ``(top_score, mean_score, top_gap, scored_families, gap_families)``. ``top_score`` is the maximum
     family top and ``top_gap`` the maximum family-local ``top - mean``. ``mean_score`` is the mean
     of all scored candidates pooled across scored families — a different basis from the
     family-local ``top_gap`` — and is reported **for observation only; it never takes part in the
@@ -525,22 +529,29 @@ def _score_signals(candidates: Sequence[RecallCandidate]) -> tuple[float, float,
     (``scored_families == 0``), so the aggregate values here stay ``0.0`` rather than fabricated.
     """
 
-    top_score = 0.0
+    top_score = -1.0
     top_gap = 0.0
     scored_families = 0
+    gap_families = 0
     all_scores: list[float] = []
     for family in _SCORING_FAMILIES:
-        family_scores = [candidate.score for candidate in candidates if candidate.family == family]
+        family_scores = [
+            candidate.relevance
+            for candidate in candidates
+            if candidate.family == family and candidate.relevance is not None
+        ]
         if not family_scores:
             continue
         scored_families += 1
         family_top = max(family_scores)
         family_mean = sum(family_scores) / len(family_scores)
         top_score = max(top_score, family_top)
-        top_gap = max(top_gap, family_top - family_mean)
+        if len(family_scores) > 1:
+            gap_families += 1
+            top_gap = max(top_gap, family_top - family_mean)
         all_scores.extend(family_scores)
     mean_score = sum(all_scores) / len(all_scores) if all_scores else 0.0
-    return top_score, mean_score, top_gap, scored_families
+    return (top_score if all_scores else 0.0), mean_score, top_gap, scored_families, gap_families
 
 
 __all__ = [

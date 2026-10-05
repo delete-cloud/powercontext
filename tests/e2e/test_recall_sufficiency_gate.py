@@ -64,6 +64,7 @@ from powercontext.builtin.runtime.recall_sufficiency import (
     RecallSufficiencyGate,
 )
 from powercontext.builtin.scope import ScopeDraft
+from powercontext.server.mapping import prepared_context_response
 
 # A three-term query is required: the round-zero floor only differs from the round-one floor
 # once the query has more than two Analyzer terms (``fts_query_requirements`` clamps a short
@@ -225,6 +226,37 @@ def test_default_off_matches_a_sufficient_round_zero_byte_for_byte(tmp_path, mon
         assert enabled_build.context.content == disabled_build.context.content
         assert enabled_build.context.content_bytes == disabled_build.context.content_bytes
         assert enabled_build.origins == disabled_build.origins
+
+    asyncio.run(scenario())
+
+
+def test_prepare_exposes_only_aggregate_gate_result_when_assessed(tmp_path) -> None:
+    async def scenario() -> None:
+        database = tmp_path / "gate-result.db"
+        request = _memory_request()
+        async with _runtime(database) as disabled:
+            scope_id = await _create_scope(disabled, "gate-result")
+            await _seed(disabled, scope_id, ["alpha beta gamma secret evidence", "alpha beta gamma second"])
+            without_gate = await disabled.context.for_scope(scope_id).prepare(request)
+            assert without_gate.recall_gate is None
+            assert prepared_context_response(without_gate).recall_gate is None
+
+        async with _runtime(database, RuntimeConfig(recall_gate_enabled=True)) as enabled:
+            with_gate = await enabled.context.for_scope(scope_id).prepare(request)
+            assert with_gate.recall_gate is not None
+            result = with_gate.recall_gate.model_dump(mode="json")
+            assert set(result) == {"reason", "rounds", "candidate_count", "top_relevance", "lexical_overlap"}
+            assert result["rounds"] >= 1
+            assert result["candidate_count"] >= 1
+            assert result["top_relevance"] is None  # This scenario uses SQLite FTS only.
+            assert "secret" not in str(result)
+            assert "entry" not in str(result)
+            assert prepared_context_response(with_gate).recall_gate is not None
+
+            skipped = await enabled.context.for_scope(scope_id).prepare(
+                PrepareContextRequest.model_validate({"query": _QUERY, "assembly": {"sections": []}})
+            )
+            assert skipped.recall_gate is None
 
     asyncio.run(scenario())
 

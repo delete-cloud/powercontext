@@ -854,6 +854,28 @@ class HandoffPromptKey(StrEnum):
     HANDOFF_GENERATE = "handoff.generate"
 
 
+class RecallGateResult(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    reason: Annotated[
+        StrictStr,
+        Field(description="Final recall gate reason code; contains no query or evidence identity.", min_length=1),
+    ]
+    rounds: Annotated[StrictInt, Field(ge=1)]
+    candidate_count: Annotated[StrictInt, Field(ge=0)]
+    top_relevance: Annotated[
+        StrictFloat | None,
+        Field(description="Best admitted vector cosine similarity, or null if none was available.", ge=-1.0, le=1.0),
+    ]
+    lexical_overlap: Annotated[
+        StrictFloat | None,
+        Field(
+            description="Best candidate query-term recall, or null if assessment failed before scoring.", ge=0.0, le=1.0
+        ),
+    ]
+
+
 class RepairSurface(StrEnum):
     EXPERIENCE_CONTENT = "experience_content"
     WORKING_STATE = "working_state"
@@ -3104,6 +3126,7 @@ class PreparedContext(BaseModel):
     status: PreparedContextStatus
     content: Annotated[StrictStr | None, Field(...)]
     content_bytes: Annotated[StrictInt, Field(ge=0)]
+    recall_gate: RecallGateResult | None = None
 
 
 class EntryChange(BaseModel):

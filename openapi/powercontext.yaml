@@ -7069,6 +7069,36 @@ components:
         content_bytes:
           type: integer
           minimum: 0
+        recall_gate:
+          $ref: "#/components/schemas/RecallGateResult"
+          nullable: true
+    RecallGateResult:
+      type: object
+      additionalProperties: false
+      required: [reason, rounds, candidate_count, top_relevance, lexical_overlap]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          description: Final recall gate reason code; contains no query or evidence identity.
+        rounds:
+          type: integer
+          minimum: 1
+        candidate_count:
+          type: integer
+          minimum: 0
+        top_relevance:
+          type: number
+          minimum: -1
+          maximum: 1
+          nullable: true
+          description: Best admitted vector cosine similarity, or null if none was available.
+        lexical_overlap:
+          type: number
+          minimum: 0
+          maximum: 1
+          nullable: true
+          description: Best candidate query-term recall, or null if assessment failed before scoring.
     EntryChange:
       type: object
       additionalProperties: false

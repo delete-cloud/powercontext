@@ -6606,10 +6606,39 @@ OPENAPI_SCHEMA: dict[str, JsonValue] = {
                     "status": {"$ref": "#/components/schemas/PreparedContextStatus"},
                     "content": {"type": "string", "nullable": True},
                     "content_bytes": {"type": "integer", "minimum": 0.0},
+                    "recall_gate": {"$ref": "#/components/schemas/RecallGateResult", "nullable": True},
                 },
                 "additionalProperties": False,
                 "type": "object",
                 "required": ["schema", "status", "content", "content_bytes"],
+            },
+            "RecallGateResult": {
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Final recall gate reason code; contains no query or evidence identity.",
+                    },
+                    "rounds": {"type": "integer", "minimum": 1.0},
+                    "candidate_count": {"type": "integer", "minimum": 0.0},
+                    "top_relevance": {
+                        "type": "number",
+                        "maximum": 1.0,
+                        "minimum": -1.0,
+                        "description": "Best admitted vector cosine similarity, or null if none was available.",
+                        "nullable": True,
+                    },
+                    "lexical_overlap": {
+                        "type": "number",
+                        "maximum": 1.0,
+                        "minimum": 0.0,
+                        "description": "Best candidate query-term recall, or null if assessment failed before scoring.",
+                        "nullable": True,
+                    },
+                },
+                "additionalProperties": False,
+                "type": "object",
+                "required": ["reason", "rounds", "candidate_count", "top_relevance", "lexical_overlap"],
             },
             "EntryChange": {
                 "properties": {
