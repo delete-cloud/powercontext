@@ -860,7 +860,10 @@ class RecallGateResult(BaseModel):
     )
     reason: Annotated[
         StrictStr,
-        Field(description="Final recall gate reason code; contains no query or evidence identity.", min_length=1),
+        Field(
+            description='Final recall gate reason code describing why expansion stopped; contains no query or evidence identity. "sufficient" means the configured stop signals were met, not that the delivered evidence is semantically sufficient.',
+            min_length=1,
+        ),
     ]
     rounds: Annotated[
         StrictInt,

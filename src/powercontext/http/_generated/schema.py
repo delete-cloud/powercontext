@@ -6665,7 +6665,37 @@ OPENAPI_SCHEMA: dict[str, JsonValue] = {
                     "reason": {
                         "type": "string",
                         "minLength": 1,
-                        "description": "Final recall gate reason code; contains no query or evidence identity.",
+                        "description": "Final "
+                        "recall "
+                        "gate "
+                        "reason "
+                        "code "
+                        "describing "
+                        "why "
+                        "expansion "
+                        "stopped; "
+                        "contains "
+                        "no "
+                        "query "
+                        "or "
+                        "evidence "
+                        "identity. "
+                        '"sufficient" '
+                        "means "
+                        "the "
+                        "configured "
+                        "stop "
+                        "signals "
+                        "were "
+                        "met, "
+                        "not "
+                        "that "
+                        "the "
+                        "delivered "
+                        "evidence "
+                        "is "
+                        "semantically "
+                        "sufficient.",
                     },
                     "rounds": {
                         "type": "integer",
@@ -6742,6 +6772,12 @@ OPENAPI_SCHEMA: dict[str, JsonValue] = {
                 "additionalProperties": False,
                 "type": "object",
                 "required": ["reason", "rounds", "candidate_count", "top_relevance", "lexical_overlap"],
+                "description": "Aggregate recall-gate verdict for "
+                "one preparation. It reports why "
+                "the gate stopped expanding "
+                "recall, not whether the delivered "
+                "evidence is semantically "
+                "sufficient.",
             },
             "EntryChange": {
                 "properties": {
