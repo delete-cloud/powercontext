@@ -17,7 +17,7 @@ import json
 
 import httpx
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from powercontext.client import (
     ForbiddenResponseError,
@@ -42,6 +42,7 @@ from powercontext.http import (
     ArtifactAccessResource,
     ArtifactReference,
     CaptureContentSourceRequest,
+    ContextAssembly,
     ExactScopeSelection,
     FlushTopicMemoryRequest,
     GetHandoffReportRequest,
@@ -105,6 +106,54 @@ def test_prepare_client_preserves_omitted_and_explicit_assembly() -> None:
         assert bodies[2]["assembly"]["sections"] == []
 
     asyncio.run(scenario())
+
+
+def test_prepare_client_omits_recall_gate_flag_unless_opted_in() -> None:
+    class _LegacyPrepareContextRequest(BaseModel):
+        """Prepare body shape from before the recall-gate opt-in existed."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        scope_id: str
+        query: str
+        max_bytes: int
+        include_code: bool
+        assembly: ContextAssembly | None = None
+
+    async def scenario() -> list[dict[str, object]]:
+        bodies = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            bodies.append(json.loads(request.content))
+            return httpx.Response(
+                200,
+                json={
+                    "schema": "powercontext.prepared-context.v1",
+                    "status": "empty",
+                    "content": None,
+                    "content_bytes": 0,
+                },
+            )
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+            client = PowerContextClient("https://memory.example", http_client=http_client)
+            await client.prepare_context(PrepareContextRequest(scope_id="scope", query="legacy"))
+            await client.prepare_context(
+                PrepareContextRequest(scope_id="scope", query="off", include_recall_gate=False)
+            )
+            await client.prepare_context(PrepareContextRequest(scope_id="scope", query="on", include_recall_gate=True))
+        return bodies
+
+    bodies = asyncio.run(scenario())
+
+    assert "include_recall_gate" not in bodies[0]
+    assert "include_recall_gate" not in bodies[1]
+    assert bodies[2]["include_recall_gate"] is True
+    # A server built before the opt-in existed forbids the field entirely.
+    _LegacyPrepareContextRequest.model_validate(bodies[0])
+    _LegacyPrepareContextRequest.model_validate(bodies[1])
+    with pytest.raises(ValidationError):
+        _LegacyPrepareContextRequest.model_validate(bodies[2])
 
 
 def test_client_exposes_all_three_topic_memory_http_operations_without_search_mode() -> None:
